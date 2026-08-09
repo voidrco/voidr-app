@@ -1,0 +1,44 @@
+{
+  "name": "voidr-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Voidr Capture desktop application for Web and Mobile verification",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "desktop"
+  ],
+  "overrides": {
+    "@electron-forge/plugin-fuses": {
+      "@electron/fuses": "2.1.3"
+    },
+    "brace-expansion@1": "1.1.18",
+    "esbuild": "0.28.2",
+    "minimatch@3": "3.1.5",
+    "picomatch@2": "2.3.2",
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
+  },
+  "scripts": {
+    "test": "npm run test:capture",
+    "test:capture": "npm run test --workspace @voidr/capture-contracts && npm run test --workspace @voidr/capture-kernel && npm run test --workspace @voidr/capture-desktop",
+    "typecheck": "npm run capture:typecheck",
+    "capture:typecheck": "npm run typecheck --workspace @voidr/capture-contracts && npm run typecheck --workspace @voidr/capture-kernel && npm run typecheck --workspace @voidr/capture-presentation && npm run typecheck --workspace @voidr/capture-design-system && npm run typecheck --workspace @voidr/capture-desktop",
+    "build": "npm run capture:build",
+    "capture:build": "npm run build --workspace @voidr/capture-contracts && npm run build --workspace @voidr/capture-kernel && npm run build --workspace @voidr/capture-presentation && npm run build --workspace @voidr/capture-design-system && npm run build --workspace @voidr/capture-desktop",
+    "dev": "npm run dev --workspace @voidr/capture-desktop",
+    "capture:package": "npm run package --workspace @voidr/capture-desktop",
+    "capture:make": "npm run make --workspace @voidr/capture-desktop",
+    "smoke:web": "npm run capture:build && node desktop/scripts/local-web-smoke.mjs"
+  },
+  "devDependencies": {
+    "@electron/fuses": "^2.1.3",
+    "esbuild": "0.28.2",
+    "picomatch": "2.3.2",
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
+  }
+}

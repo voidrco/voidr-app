@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.capture.json",
+  "include": ["src/**/*.ts"]
+}

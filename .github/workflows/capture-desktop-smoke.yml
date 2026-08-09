@@ -1,0 +1,33 @@
+name: Capture Desktop smoke
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'packages/capture-*/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.capture.json'
+      - '.github/workflows/capture-desktop-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run capture:typecheck
+      - run: npm run test:capture
+      - run: npm run capture:build
+      - run: npm run capture:make
