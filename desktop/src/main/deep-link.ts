@@ -1,4 +1,10 @@
-import { isTrustedWebUrl, redactUrl } from '@voidr/capture-contracts';
+import {
+  VOIDR_CAPTURE_LAUNCH_VERSION,
+  desktopCaptureLaunchSchema,
+  isTrustedWebUrl,
+  redactUrl,
+  type DesktopCaptureLaunch,
+} from '@voidr/capture-contracts';
 
 const V1 = 'voidr-loop-v1=';
 const V2 = 'voidr-loop-v2=';
@@ -19,6 +25,39 @@ export interface SecretLoopLaunch {
   token: string;
   safeUrl: string;
   transportVersion: 'v1' | 'v2' | 'legacy';
+}
+
+export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
+  const url = new URL(input);
+  if (
+    url.protocol !== 'voidr:' ||
+    url.hostname !== 'capture' ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error('O link não pertence ao Voidr Capture.');
+  }
+  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const keys = [...url.searchParams.keys()];
+  if (
+    segments.length !== 4 ||
+    segments[0] !== 'loops' ||
+    segments[2] !== 'cycles' ||
+    keys.length !== 3 ||
+    new Set(keys).size !== 3 ||
+    keys.some((key) => !['organization', 'surface', 'v'].includes(key)) ||
+    url.searchParams.get('v') !== '1'
+  ) {
+    throw new Error('O link do Voidr Capture está incompleto ou não é suportado.');
+  }
+  return desktopCaptureLaunchSchema.parse({
+    version: VOIDR_CAPTURE_LAUNCH_VERSION,
+    organizationId: url.searchParams.get('organization'),
+    loopId: segments[1],
+    cycleId: segments[3],
+    surface: url.searchParams.get('surface'),
+  });
 }
 
 function normalizeTransport(value: string): string {

@@ -12,17 +12,6 @@ const serviceUrl = process.env.VOIDR_SERVICE_URL ?? 'http://127.0.0.1:3000/v1';
 const localKey = process.env.VERIFICATION_LOCAL_DEV_KEY ?? 'voidr-verification-local';
 const organizationId =
   process.env.VERIFICATION_LOCAL_ORGANIZATION_ID ?? 'org_verification_local';
-const runtime = {
-  serviceUrl,
-  collectorUrl: process.env.VOIDR_COLLECTOR_URL ?? 'http://localhost:3100',
-  collectorScriptUrl:
-    process.env.VOIDR_COLLECTOR_SCRIPT_URL ?? 'http://localhost:8889/dist/recorder.min.js',
-  platformUrl: process.env.VOIDR_PLATFORM_URL ?? 'http://localhost:3030',
-  localAdapter: true,
-  localDevKey: localKey,
-  organizationId,
-};
-
 const headers = {
   'Content-Type': 'application/json',
   'x-voidr-dev-key': localKey,
@@ -139,12 +128,12 @@ async function main() {
       featureUnderTest: 'Capturar uma interação Web e produzir evidência durável pelo desktop',
     }),
   });
-  const recordingUrl = prepared.recording?.url;
-  if (typeof recordingUrl !== 'string') throw new Error('Prepare não emitiu recording.url.');
+  const launchUrl = prepared.recording?.launchUrl;
+  if (typeof launchUrl !== 'string') throw new Error('Prepare não emitiu launchUrl.');
 
   const child = spawn(
     electronBinary,
-    [`--remote-debugging-port=${debuggingPort}`, desktopDirectory],
+    [`--remote-debugging-port=${debuggingPort}`, desktopDirectory, launchUrl],
     {
       cwd: desktopDirectory,
       env: {
@@ -163,9 +152,14 @@ async function main() {
     });
     control = new DevToolsClient(controlTarget.webSocketDebuggerUrl);
     const startResult = await control.evaluate(`(async()=>{
-      const runtime=${JSON.stringify(runtime)};
-      await window.voidrCapture.capture.prepareWeb({recordingUrl:${JSON.stringify(recordingUrl)},runtime});
-      return window.voidrCapture.capture.startWeb();
+      const deadline=Date.now()+20000;
+      while(Date.now()<deadline){
+        const status=await window.voidrCapture.capture.status();
+        if(status?.stage==='ready') return window.voidrCapture.capture.startWeb();
+        if(status?.stage==='recoverable_error'||status?.stage==='terminal_error') throw new Error(status.message||status.errorCode||'Handoff falhou.');
+        await new Promise((resolve)=>setTimeout(resolve,200));
+      }
+      throw new Error('Voidr Capture não consumiu o deep link em 20s.');
     })()`);
     if (startResult?.stage !== 'recording') throw new Error('O host não entrou em recording.');
 

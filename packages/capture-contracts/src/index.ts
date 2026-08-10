@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const CAPTURE_HOST_VERSION = 'CAPTURE-HOST/1' as const;
+export const VOIDR_CAPTURE_LAUNCH_VERSION = 'VOIDR-CAPTURE-LAUNCH/1' as const;
 
 const boundedId = z.string().trim().min(1).max(200);
 const opaqueId = z.string().uuid();
@@ -34,6 +35,48 @@ const trustedWebUrlSchema = z
 
 export const capturePlatformSchema = z.enum(['web', 'android', 'ios', 'api']);
 export type CapturePlatform = z.infer<typeof capturePlatformSchema>;
+
+export const desktopCaptureSurfaceSchema = z.enum(['web', 'mobile', 'api']);
+export type DesktopCaptureSurface = z.infer<typeof desktopCaptureSurfaceSchema>;
+
+export const harnessDeliveryStateSchema = z.enum([
+  'waiting',
+  'preparing',
+  'available',
+  'acknowledged',
+  'failed',
+]);
+export type HarnessDeliveryState = z.infer<typeof harnessDeliveryStateSchema>;
+
+/**
+ * Secret-free descriptor transported by the operating-system protocol handler.
+ * Authorization is resolved by the signed-in app (or the explicit localhost
+ * adapter) after launch; the URI itself never grants access to a Cycle.
+ */
+export const desktopCaptureLaunchSchema = z.object({
+  version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
+  organizationId: boundedId,
+  loopId: boundedId,
+  cycleId: opaqueId,
+  surface: desktopCaptureSurfaceSchema,
+});
+export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
+
+/** Safe projection returned to the control renderer after main-process resolution. */
+export const desktopCaptureResolutionSchema = z.object({
+  version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
+  captureAdapter: z.literal('voidr_app'),
+  surface: desktopCaptureSurfaceSchema,
+  loopId: boundedId,
+  cycleId: opaqueId,
+  cycleNumber: z.number().int().positive(),
+  applicationId: boundedId,
+  environment: boundedId,
+  mission: z.string().trim().min(1).max(1_000),
+  targetUrl: trustedWebUrlSchema,
+  harnessName: z.string().trim().max(120).optional(),
+});
+export type DesktopCaptureResolution = z.infer<typeof desktopCaptureResolutionSchema>;
 
 export const captureStageSchema = z.enum([
   'idle',
@@ -118,6 +161,7 @@ export const safeWebContextSchema = z.object({
   lifecycleVersion: z.number().int().nonnegative(),
   cycleNumber: z.number().int().positive().optional(),
   harnessName: z.string().trim().max(120).optional(),
+  harnessDeliveryState: harnessDeliveryStateSchema.optional(),
 });
 export type SafeWebContext = z.infer<typeof safeWebContextSchema>;
 

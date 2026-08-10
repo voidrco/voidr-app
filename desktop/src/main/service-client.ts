@@ -1,8 +1,12 @@
 import { z } from 'zod';
 import {
+  desktopCaptureLaunchSchema,
+  desktopCaptureResolutionSchema,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
   redactText,
+  type DesktopCaptureLaunch,
+  type DesktopCaptureResolution,
   type LocalRuntimeConfig,
   type MobileAttachInput,
   type SafeWebContext,
@@ -32,9 +36,25 @@ const validationSchema = z.object({
       mission: z.string().optional(),
       targetUrl: z.string().url().optional(),
       harness: z.object({ name: z.string().optional() }).passthrough().optional(),
+      harnessDelivery: z
+        .object({
+          state: z.enum(['waiting', 'preparing', 'available', 'acknowledged', 'failed']),
+        })
+        .passthrough()
+        .optional(),
     })
     .passthrough(),
 });
+
+const desktopHandoffSchema = desktopCaptureResolutionSchema.extend({
+  recordingUrl: z.string().url().max(16_384).optional(),
+  recordingExpiresAt: z.coerce.date().optional(),
+});
+
+export type ResolvedDesktopHandoff = DesktopCaptureResolution & {
+  recordingUrl?: string;
+  recordingExpiresAt?: Date;
+};
 
 export interface SecretWebAuthorization {
   safeContext: SafeWebContext;
@@ -101,6 +121,28 @@ export class VoidrServiceClient {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
   }
 
+  async resolveDesktopLaunch(input: unknown): Promise<ResolvedDesktopHandoff> {
+    const launch: DesktopCaptureLaunch = desktopCaptureLaunchSchema.parse(input);
+    const root = this.runtime.localAdapter ? 'loop-test-dev/scenarios' : 'loop-test/scenarios';
+    const value = await jsonRequest<Json>(
+      `${this.runtime.serviceUrl}/${root}/${encodeURIComponent(launch.loopId)}` +
+        `/cycles/${encodeURIComponent(launch.cycleId)}/capture-handoff`,
+      { headers: this.localHeaders(launch.organizationId) },
+    );
+    const handoff = desktopHandoffSchema.parse(value);
+    if (
+      handoff.loopId !== launch.loopId ||
+      handoff.cycleId !== launch.cycleId ||
+      handoff.surface !== launch.surface
+    ) {
+      throw new Error('O Service retornou um handoff diferente do link solicitado.');
+    }
+    if (handoff.surface === 'web' && !handoff.recordingUrl) {
+      throw new Error('A autorização Web não foi emitida para o Voidr Capture.');
+    }
+    return handoff;
+  }
+
   async validateWebLaunch(
     launch: SecretLoopLaunch,
     lifecycleGeneration: string,
@@ -114,6 +156,7 @@ export class VoidrServiceClient {
           scenarioId: launch.scenarioId,
           token: launch.token,
           lifecycleGeneration,
+          captureHost: 'voidr_app',
           ...(launch.cycleId ? { cycleId: launch.cycleId } : {}),
         }),
       },
@@ -134,6 +177,9 @@ export class VoidrServiceClient {
         lifecycleVersion: verification.lifecycleVersion,
         ...(verification.cycleNumber ? { cycleNumber: verification.cycleNumber } : {}),
         ...(verification.harness?.name ? { harnessName: verification.harness.name } : {}),
+        ...(verification.harnessDelivery?.state
+          ? { harnessDeliveryState: verification.harnessDelivery.state }
+          : {}),
       },
       collectorApiKey: validation.collectorApiKey,
       attachToken: validation.attachToken,
@@ -310,11 +356,11 @@ export class VoidrServiceClient {
     );
   }
 
-  private localHeaders(): Record<string, string> {
+  private localHeaders(organizationId = this.runtime.organizationId): Record<string, string> {
     if (!this.runtime.localAdapter) return {};
     return {
       'x-voidr-dev-key': this.runtime.localDevKey,
-      'x-voidr-organization-id': this.runtime.organizationId,
+      'x-voidr-organization-id': organizationId,
     };
   }
 }

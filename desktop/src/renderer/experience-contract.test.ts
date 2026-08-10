@@ -5,11 +5,29 @@ import { describe, expect, it } from 'vitest';
 const appSource = readFileSync(fileURLToPath(new URL('./App.tsx', import.meta.url)), 'utf8');
 const styleSource = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8');
 const entrySource = readFileSync(fileURLToPath(new URL('./src.tsx', import.meta.url)), 'utf8');
+const designSystemSource = readFileSync(
+  fileURLToPath(new URL('../../../packages/capture-design-system/src/index.tsx', import.meta.url)),
+  'utf8',
+);
+const designSystemStyles = readFileSync(
+  fileURLToPath(new URL('../../../packages/capture-design-system/src/styles.css', import.meta.url)),
+  'utf8',
+);
 
 describe('desktop experience contract', () => {
   it('keeps Voidr identity present in idle and agentic states', () => {
     expect(appSource).toContain('<VoidrBrand />');
     expect(appSource).toContain('<VoidrMark size={30} active />');
+    expect(designSystemSource).toContain('<svg className="vdr-logo"');
+    expect(designSystemSource).not.toContain('src="./logo-light.svg"');
+  });
+
+  it('uses the complete local Space Grotesk family without a network fallback', () => {
+    for (const weight of [300, 400, 500, 600, 700]) {
+      expect(designSystemStyles).toContain(`@fontsource/space-grotesk/latin-${weight}.css`);
+    }
+    expect(styleSource).toContain('font-synthesis: none');
+    expect(styleSource).toContain('font-family: var(--font-sans)');
   });
 
   it('does not expose implementation jargon in the primary workflow', () => {
@@ -40,5 +58,12 @@ describe('desktop experience contract', () => {
     expect(appSource).toContain('localDevKey: _ephemeralSecret');
     expect(appSource).toContain('JSON.stringify(persistableRuntime)');
     expect(appSource).not.toContain("JSON.stringify(runtime));");
+  });
+
+  it('claims harness receipt only after the authoritative acknowledgement', () => {
+    expect(appSource).toContain("harnessDeliveryState === 'acknowledged'");
+    expect(appSource).toContain('recebeu o contexto citado');
+    expect(appSource).toContain('Aguardando o ${agentName} confirmar o contexto');
+    expect(appSource).not.toContain('recebeu a confirmação e já pode continuar');
   });
 });

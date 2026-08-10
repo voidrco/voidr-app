@@ -44,6 +44,23 @@ describe('Electron security contract', () => {
     expect(preloadSource).not.toContain('ipcRenderer.send(');
   });
 
+  it('recreates and foregrounds the control window when a protocol launch arrives', () => {
+    expect(mainSource).toContain('let mainWindowCreation: Promise<void> | undefined');
+    expect(mainSource).toContain('mainWindowCreation = createWindow().finally');
+    expect(mainSource).toContain("app.focus({ steal: true })");
+    expect(mainSource).toContain('mainWindow.moveTop()');
+    expect(mainSource).toMatch(/function receiveProtocolUrl[\s\S]*?scheduleMainWindow\(\)/);
+    expect(mainSource).toContain("app.on('open-url'");
+  });
+
+  it('never registers the generic Electron bundle as the macOS protocol owner', () => {
+    expect(mainSource).toContain("if (!app.isPackaged)");
+    expect(mainSource).toContain("process.platform !== 'darwin'");
+    expect(mainSource).toMatch(
+      /if \(!app\.isPackaged\)[\s\S]*?return;[\s\S]*?app\.setAsDefaultProtocolClient\('voidr'\)/,
+    );
+  });
+
   it('isolates remote state by organization and rejects redirectable collector code', () => {
     expect(captureSource).toContain('`${organizationId}\\0${applicationId}`');
     expect(captureSource).toContain("redirect: 'error'");

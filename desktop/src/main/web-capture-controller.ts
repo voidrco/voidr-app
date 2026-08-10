@@ -10,6 +10,7 @@ import {
   type AnnotationInput,
   type CaptureStatus,
   type CollectorStopReceipt,
+  type HarnessDeliveryState,
 } from '@voidr/capture-contracts';
 import {
   captureReducer,
@@ -659,15 +660,37 @@ export class WebCaptureController {
         },
       });
       this.#setState(captureReducer(this.#state, { type: 'PROCESS' }));
-      const ready = await this.#waitForCycleReady();
-      if (ready) this.#setState(captureReducer(this.#state, { type: 'READY' }));
+      const completion = await this.#waitForCycleReady();
+      if (completion.deliveryState) {
+        this.#setState(
+          captureReducer(this.#state, {
+            type: 'HARNESS_DELIVERY',
+            state: completion.deliveryState,
+          }),
+        );
+      }
+      if (completion.ready) this.#setState(captureReducer(this.#state, { type: 'READY' }));
       await this.ledger.append({
-        type: ready ? 'web.ready' : 'web.processing',
+        type: completion.ready ? 'web.ready' : 'web.processing',
         generation: this.#state.generation,
         sessionId: this.#stopReceipt.sessionId,
         stage: this.#state.stage,
-        data: { indexedThrough },
+        data: {
+          indexedThrough,
+          ...(completion.deliveryState ? { harnessDeliveryState: completion.deliveryState } : {}),
+        },
       });
+      if (
+        completion.ready &&
+        completion.deliveryState &&
+        completion.deliveryState !== 'acknowledged'
+      ) {
+        void this.#observeHarnessAcknowledgement(
+          this.#client,
+          this.#authorization.safeContext.verificationId,
+          this.#state.generation,
+        );
+      }
       this.#authorization = undefined;
       this.#client = undefined;
       this.#collectorScript = undefined;
@@ -678,24 +701,75 @@ export class WebCaptureController {
     }
   }
 
-  async #waitForCycleReady(timeoutMs = 30_000): Promise<boolean> {
-    if (!this.#authorization || !this.#client || !this.#client.runtime.localAdapter) return true;
+  async #waitForCycleReady(
+    timeoutMs = 30_000,
+  ): Promise<{ ready: boolean; deliveryState?: HarnessDeliveryState }> {
+    if (!this.#authorization || !this.#client || !this.#client.runtime.localAdapter) {
+      return { ready: true, deliveryState: this.#authorization?.safeContext.harnessDeliveryState };
+    }
     const deadline = Date.now() + timeoutMs;
+    let deliveryState = this.#authorization.safeContext.harnessDeliveryState;
     while (Date.now() < deadline) {
       const status = await this.#client
         .getVerificationStatus(this.#authorization.safeContext.verificationId)
         .catch(() => null);
       const state = status && typeof status.status === 'string' ? status.status : '';
+      const candidateDeliveryState =
+        status?.harnessDelivery && typeof status.harnessDelivery === 'object'
+          ? (status.harnessDelivery as Record<string, unknown>).state
+          : undefined;
+      if (
+        typeof candidateDeliveryState === 'string' &&
+        ['waiting', 'preparing', 'available', 'acknowledged', 'failed'].includes(
+          candidateDeliveryState,
+        )
+      ) {
+        deliveryState = candidateDeliveryState as HarnessDeliveryState;
+      }
       if (
         ['artifact_ready', 'diagnosing', 'diagnosis_ready', 'decision_required', 'open', 'confirmed'].includes(
           state,
         )
       ) {
-        return true;
+        return { ready: true, ...(deliveryState ? { deliveryState } : {}) };
       }
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
-    return false;
+    return { ready: false, ...(deliveryState ? { deliveryState } : {}) };
+  }
+
+  async #observeHarnessAcknowledgement(
+    client: VoidrServiceClient,
+    verificationId: string,
+    generation: string | undefined,
+    timeoutMs = 120_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (
+      Date.now() < deadline &&
+      generation &&
+      this.#state.generation === generation &&
+      this.#state.stage === 'ready_for_review'
+    ) {
+      const status = await client.getVerificationStatus(verificationId).catch(() => null);
+      const candidate =
+        status?.harnessDelivery && typeof status.harnessDelivery === 'object'
+          ? (status.harnessDelivery as Record<string, unknown>).state
+          : undefined;
+      if (
+        typeof candidate === 'string' &&
+        ['waiting', 'preparing', 'available', 'acknowledged', 'failed'].includes(candidate)
+      ) {
+        this.#setState(
+          captureReducer(this.#state, {
+            type: 'HARNESS_DELIVERY',
+            state: candidate as HarnessDeliveryState,
+          }),
+        );
+        if (candidate === 'acknowledged' || candidate === 'failed') return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
   }
 
   async #ingestLifecycle(type: 'recording.started' | 'seal.requested', payload: Record<string, unknown>): Promise<void> {

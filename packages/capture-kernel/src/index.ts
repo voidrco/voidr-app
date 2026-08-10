@@ -1,4 +1,10 @@
-import type { CapturePlatform, CaptureStage, CaptureStatus, SafeWebContext } from '@voidr/capture-contracts';
+import type {
+  CapturePlatform,
+  CaptureStage,
+  CaptureStatus,
+  HarnessDeliveryState,
+  SafeWebContext,
+} from '@voidr/capture-contracts';
 
 export type EvidenceCategory = keyof CaptureStatus['evidence'];
 
@@ -18,6 +24,7 @@ export type CaptureAction =
   | { type: 'ATTACH' }
   | { type: 'PROCESS' }
   | { type: 'READY' }
+  | { type: 'HARNESS_DELIVERY'; state: HarnessDeliveryState }
   | { type: 'OFFLINE'; message?: string }
   | { type: 'FAIL'; message: string; code: string; retryFrom?: 'stop' | 'attach'; terminal?: boolean }
   | { type: 'RESET' };
@@ -104,6 +111,10 @@ export function captureReducer(state: CaptureState, action: CaptureAction): Capt
       return transition(state, 'processing');
     case 'READY':
       return transition(state, 'ready_for_review');
+    case 'HARNESS_DELIVERY':
+      return state.context
+        ? { ...state, context: { ...state.context, harnessDeliveryState: action.state } }
+        : state;
     case 'OFFLINE':
       return { ...transition(state, 'offline'), message: action.message };
     case 'FAIL':

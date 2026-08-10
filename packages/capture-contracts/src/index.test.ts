@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPTURE_HOST_VERSION,
+  VOIDR_CAPTURE_LAUNCH_VERSION,
   captureEnvelopeSchema,
+  desktopCaptureLaunchSchema,
   isTrustedWebUrl,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
@@ -32,6 +34,21 @@ describe('CAPTURE-HOST/1 contracts', () => {
         lifecycleVersion: -1,
         runtime: {},
       }),
+    ).toThrow();
+  });
+
+  it('keeps desktop launch descriptors secret-free and cycle-bound', () => {
+    const launch = desktopCaptureLaunchSchema.parse({
+      version: VOIDR_CAPTURE_LAUNCH_VERSION,
+      organizationId: 'org_itau',
+      loopId: 'lts_checkout',
+      cycleId: '88ad0919-9754-4787-8a43-fc4bf79e52bd',
+      surface: 'web',
+    });
+    expect(JSON.stringify(launch)).not.toMatch(/token|secret|authorization/i);
+    expect(launch.organizationId).toBe('org_itau');
+    expect(() =>
+      desktopCaptureLaunchSchema.parse({ ...launch, cycleId: '../another-tenant' }),
     ).toThrow();
   });
 

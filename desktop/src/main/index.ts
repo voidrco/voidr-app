@@ -4,10 +4,12 @@ import { app, BrowserWindow, ipcMain, net, protocol, session, shell } from 'elec
 import { z } from 'zod';
 import {
   androidLaunchInputSchema,
+  desktopCaptureLaunchSchema,
   isTrustedWebUrl,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
   prepareWebInputSchema,
+  type DesktopCaptureLaunch,
 } from '@voidr/capture-contracts';
 import { annotationInputSchema } from '@voidr/capture-contracts';
 import {
@@ -19,6 +21,7 @@ import { CaptureLedger } from './ledger';
 import { CONTROL_ORIGIN, CONTROL_SCHEME, isControlRendererUrl, resolveControlAsset } from './app-protocol';
 import { VoidrServiceClient } from './service-client';
 import { WebCaptureController } from './web-capture-controller';
+import { parseDesktopCaptureLaunch } from './deep-link';
 
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
@@ -28,6 +31,8 @@ const CAPTURE_DOCK_HEIGHT = 94;
 
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
+let pendingLaunch: DesktopCaptureLaunch | undefined;
+let mainWindowCreation: Promise<void> | undefined;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -56,6 +61,64 @@ const voiceInputSchema = z.object({
   pcmBase64: z.string().min(428).max(5_200_000),
   language: z.string().min(2).max(16).optional(),
 });
+const acceptLaunchSchema = z.object({
+  launch: desktopCaptureLaunchSchema,
+  runtime: localRuntimeConfigSchema,
+});
+
+function protocolUrlFromArgv(argv: readonly string[]): string | undefined {
+  return argv.find((value) => value.startsWith('voidr://'));
+}
+
+function publishPendingLaunch(): void {
+  if (pendingLaunch && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('capture:launch-received', pendingLaunch);
+  }
+}
+
+function revealMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  // macOS needs a visible key-window candidate before application activation;
+  // focusing the app while the only window is hidden can leave the capture on
+  // another Space even though the process opened successfully.
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  mainWindow.focus();
+  mainWindow.moveTop();
+}
+
+async function ensureMainWindow(): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    revealMainWindow();
+    return;
+  }
+  if (!app.isReady()) return;
+  if (!mainWindowCreation) {
+    mainWindowCreation = createWindow().finally(() => {
+      mainWindowCreation = undefined;
+    });
+  }
+  await mainWindowCreation;
+  publishPendingLaunch();
+  revealMainWindow();
+}
+
+function scheduleMainWindow(): void {
+  void ensureMainWindow().catch(() => {
+    // Keep the descriptor pending so a later activate/open-url can retry safely.
+  });
+}
+
+function receiveProtocolUrl(value: string): void {
+  try {
+    pendingLaunch = parseDesktopCaptureLaunch(value);
+    publishPendingLaunch();
+    scheduleMainWindow();
+  } catch {
+    // Untrusted protocol input fails closed and never reaches a renderer.
+  }
+}
 
 function targetBounds(): Electron.Rectangle {
   const size = mainWindow?.getContentSize() ?? [1_280, 820];
@@ -85,6 +148,28 @@ function registerIpc(): void {
   ipcMain.handle('capture:status', (event) => {
     assertControlSender(event);
     return webCapture?.status;
+  });
+  ipcMain.handle('capture:pending-launch', (event) => {
+    assertControlSender(event);
+    return pendingLaunch ?? null;
+  });
+  ipcMain.handle('capture:accept-launch', async (event, input) => {
+    assertControlSender(event);
+    const parsed = acceptLaunchSchema.parse(input);
+    const client = new VoidrServiceClient(parsed.runtime);
+    const handoff = await client.resolveDesktopLaunch(parsed.launch);
+    const { recordingUrl, recordingExpiresAt: _recordingExpiresAt, ...resolution } = handoff;
+    let status = webCapture?.status;
+    if (handoff.surface === 'web') {
+      status = await webCapture!.prepare({ recordingUrl, runtime: parsed.runtime });
+    }
+    if (
+      pendingLaunch?.loopId === parsed.launch.loopId &&
+      pendingLaunch.cycleId === parsed.launch.cycleId
+    ) {
+      pendingLaunch = undefined;
+    }
+    return { resolution, status };
   });
   ipcMain.handle('capture:prepare-web', async (event, input) => {
     assertControlSender(event);
@@ -243,6 +328,7 @@ async function createWindow(): Promise<void> {
   });
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
   mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.webContents.on('did-finish-load', publishPendingLaunch);
   if (isDevelopment) {
     await mainWindow.loadURL(process.env.VOIDR_CAPTURE_DEV_SERVER_URL!);
   } else {
@@ -251,22 +337,34 @@ async function createWindow(): Promise<void> {
 }
 
 function registerProtocol(): void {
-  if (process.defaultApp && process.argv[1]) {
-    app.setAsDefaultProtocolClient('voidr', process.execPath, [path.resolve(process.argv[1])]);
-  } else {
-    app.setAsDefaultProtocolClient('voidr');
+  // On macOS Electron's development binary has the generic
+  // `com.github.electron` bundle identifier. Registering it as the handler
+  // makes LaunchServices open Electron's welcome page instead of this app.
+  // The local MCP bridge can launch the source checkout explicitly during
+  // development; only the packaged Voidr bundle may own `voidr://` on macOS.
+  if (!app.isPackaged) {
+    if (process.platform !== 'darwin' && process.argv[1]) {
+      app.setAsDefaultProtocolClient('voidr', process.execPath, [path.resolve(process.argv[1])]);
+    }
+    return;
   }
+  app.setAsDefaultProtocolClient('voidr');
 }
 
 const lock = app.requestSingleInstanceLock();
 if (!lock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+  const initialProtocolUrl = protocolUrlFromArgv(process.argv);
+  if (initialProtocolUrl) receiveProtocolUrl(initialProtocolUrl);
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    receiveProtocolUrl(url);
+  });
+  app.on('second-instance', (_event, argv) => {
+    const url = protocolUrlFromArgv(argv);
+    if (url) receiveProtocolUrl(url);
+    else scheduleMainWindow();
   });
   app.on('session-created', hardenSession);
   app.whenReady().then(async () => {
@@ -274,9 +372,9 @@ if (!lock) {
     registerControlProtocol();
     hardenSession(session.defaultSession);
     registerIpc();
-    await createWindow();
+    await ensureMainWindow();
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+      scheduleMainWindow();
     });
   });
   app.on('window-all-closed', () => {

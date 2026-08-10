@@ -1,13 +1,15 @@
 :root {
   color-scheme: dark;
   font-family: var(--font-sans);
+  font-synthesis: none;
   background: var(--background);
   color: var(--text-primary);
 }
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--background); }
-button, input, textarea, select { font: inherit; }
+body, button, input, textarea, select { font-family: var(--font-sans); }
+button, input, textarea, select { font-size: inherit; }
 button { color: inherit; }
 
 .capture-shell { width: 100%; height: 100%; display: grid; grid-template-rows: 58px minmax(0, 1fr); background: var(--background); }
@@ -39,6 +41,7 @@ html[data-platform='darwin'] .capture-topbar > .vdr-brand { margin-left: 96px; }
 .capture-trust-row span { display: inline-flex; align-items: center; gap: 6px; }
 .capture-trust-row svg { color: var(--color-success-light); }
 .capture-form > .vdr-btn { align-self: flex-end; min-width: 172px; margin-top: 2px; }
+.capture-inline-note { max-width: 680px; margin: 0; color: var(--text-tertiary); font-size: var(--text-2xs); line-height: 1.5; }
 
 .mobile-flow .vdr-panel-body { display: flex; flex-direction: column; }
 .mobile-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 13px; padding: 20px; border-bottom: 1px solid var(--border-color-subtle); opacity: .62; }

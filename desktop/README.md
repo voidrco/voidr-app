@@ -1,12 +1,16 @@
 # Voidr Capture Desktop
 
-O Voidr Capture Desktop é o control plane Electron para captura Web e Android. O Service continua
+O Voidr Capture Desktop é o control plane Electron para captura Web, Mobile e API. O Service continua
 sendo a autoridade de lifecycle e billing, o Collector continua sendo a autoridade da Session e o
 Voidr Platform continua sendo a experiência canônica de replay, comparação, report e Defects.
 
 ## Estado deste corte
 
-- Web gerenciado: URL assinada, `WebContentsView` sandboxed, rrweb, páginas, cliques, requests,
+- Launch canônico: `voidr://` sem segredo, tenant explícito e não autorizativo,
+  resolução org-scoped, startup, recriação de janela e second-instance.
+- Handoff MCP: bridge stdio único para Cursor, Codex e Claude Code, abertura automática,
+  receipt `VOIDR-APP-LAUNCH/1` e supressão de retries duplicados.
+- Web gerenciado: capability isolada no main process, `WebContentsView` sandboxed, rrweb, páginas, cliques, requests,
   erros, screenshots, notas, seleção nativa de elemento, voz/transcript, Stop single-flight, seal,
   attach e deep link para o Cycle.
 - Android: Doctor/descoberta por ADB, abertura allowlisted do package, descoberta da Session emitida
@@ -14,25 +18,27 @@ Voidr Platform continua sendo a experiência canônica de replay, comparação, 
   não falsifica replay mobile.
 - UI: componentes e tokens do Voidr Design System, logo oficial, estados honestos e finalização
   resumível.
-- Não incluídos neste corte: autenticação PKCE de produção, bridge Native Messaging, região livre,
-  Appium/scrcpy, iOS, captura de API e distribuição pública assinada.
+- API: Cycle e surface chegam ao app sem cair no adapter Web; proxy/CA ainda permanecem indisponíveis
+  até o gate de segurança.
+- Não incluídos neste corte: autenticação PKCE de produção, região livre, Appium/scrcpy, iOS,
+  proxy de API e distribuição pública assinada.
 
 ## Executar
 
-Na raiz de `voidr-chrome-extension`:
+Na raiz de `voidr-app`:
 
 ```bash
 npm ci
-npm run capture:typecheck
-npm run test:capture
-npm run capture:dev
+npm run typecheck
+npm test
+npm run dev
 ```
 
 Com o ambiente Verification local ativo, o smoke cria/reutiliza o fixture checkout-retry, realiza
 uma captura real, anexa screenshot, sela a Session e aguarda o Cycle:
 
 ```bash
-npm run capture:smoke:web
+npm run smoke:web
 ```
 
 Para gerar o app local sem publicar installer:
@@ -40,6 +46,13 @@ Para gerar o app local sem publicar installer:
 ```bash
 npm run capture:package
 ```
+
+No macOS, copie o bundle gerado em
+`desktop/out/Voidr Capture-darwin-*/Voidr Capture.app` para `~/Applications` ou
+`/Applications` e abra-o uma vez. O handler canônico é o bundle
+`co.voidr.capture`. O modo `npm run dev` deliberadamente não registra
+`com.github.electron` como dono de `voidr://`; o bridge MCP pode apontar para o
+checkout com `VOIDR_CAPTURE_DEV_APP_DIR=/caminho/absoluto/voidr-app/desktop`.
 
 ## Android
 

@@ -1,7 +1,15 @@
 # Voidr App
 
-Aplicação desktop oficial da Voidr para capturar verificações Web e Mobile com evidências
+Aplicação desktop oficial da Voidr para coordenar verificações Web, Mobile e API com evidências
 estruturadas, replay, anotações e entrega de contexto ao Voidr Loops.
+
+Loops chegam pelo contrato secret-free `VOIDR-CAPTURE-LAUNCH/1`; Platform abre
+`voidr://capture/...` diretamente e Cursor, Codex e Claude Code usam o bridge MCP
+stdio local do Hive. O bridge abre o mesmo descriptor no computador do harness e
+devolve `VOIDR-APP-LAUNCH/1`, sem depender de uma instrução textual ao modelo. O
+app resolve o Cycle autenticado antes de iniciar qualquer adapter. O descriptor
+carrega somente o `organizationId` não secreto necessário para selecionar o tenant;
+ele nunca concede acesso por si só.
 
 ## Desenvolvimento
 

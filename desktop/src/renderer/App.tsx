@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  Braces,
   Camera,
   CheckCircle2,
   Check,
@@ -22,7 +23,14 @@ import {
   Terminal,
   Wrench,
 } from 'lucide-react';
-import { redactText, type AndroidDevice, type CaptureStatus, type LocalRuntimeConfig } from '@voidr/capture-contracts';
+import {
+  redactText,
+  type AndroidDevice,
+  type CaptureStatus,
+  type DesktopCaptureLaunch,
+  type DesktopCaptureResolution,
+  type LocalRuntimeConfig,
+} from '@voidr/capture-contracts';
 import { Badge, Button, Panel, StatusDot, Tabs, Toast, VoidrBrand, VoidrMark } from '@voidr/capture-design-system';
 import { finalizationStages, stageCopy } from '@voidr/capture-presentation';
 import { startAudioCapture, stopAudioCapture, type ActiveAudioCapture } from './audio';
@@ -62,7 +70,7 @@ function safeError(error: unknown): string {
 
 function App() {
   const [status, setStatus] = useState<CaptureStatus>(idleStatus);
-  const [mode, setMode] = useState<'web' | 'mobile'>('web');
+  const [mode, setMode] = useState<'web' | 'mobile' | 'api'>('web');
   const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() => {
     try {
       return { ...defaultRuntime, ...JSON.parse(localStorage.getItem('voidr.capture.runtime') ?? '{}') };
@@ -90,15 +98,22 @@ function App() {
   const [mobileLoops, setMobileLoops] = useState<MobileVerification[]>([]);
   const [mobileContext, setMobileContext] = useState<{ loopId: string; cycleId: string }>();
   const [mobileAppOpened, setMobileAppOpened] = useState(false);
+  const [launchResolution, setLaunchResolution] = useState<DesktopCaptureResolution>();
+  const acceptingLaunch = useRef<string | undefined>(undefined);
 
   const copy = stageCopy[status.stage];
   const activeCapture = ['ready', 'recording', 'stopping', 'sealed', 'attaching', 'processing', 'ready_for_review', 'recoverable_error'].includes(status.stage) && status.platform === 'web';
   const recording = status.stage === 'recording';
   const finalizing = ['stopping', 'sealed', 'attaching', 'processing'].includes(status.stage);
   const agentName = status.context?.harnessName;
+  const harnessDeliveryState = status.context?.harnessDeliveryState;
   const dockDetail = feedback?.message
-    ?? (status.stage === 'ready_for_review' && agentName
-      ? `${agentName} recebeu a confirmação e já pode continuar o trabalho.`
+    ?? (status.stage === 'ready_for_review' && agentName && harnessDeliveryState === 'acknowledged'
+      ? `${agentName} recebeu o contexto citado e retomou o trabalho.`
+      : status.stage === 'ready_for_review' && agentName && harnessDeliveryState === 'failed'
+        ? `A captura está pronta, mas o retorno ao ${agentName} precisa ser tentado novamente.`
+        : status.stage === 'ready_for_review' && agentName
+          ? `A captura está pronta. Aguardando o ${agentName} confirmar o contexto.`
       : status.message ?? copy.detail);
 
   useEffect(() => {
@@ -106,6 +121,64 @@ function App() {
     void window.voidrCapture.capture.status().then((value) => value && setStatus(value));
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    const accept = async (launch: DesktopCaptureLaunch) => {
+      const key = `${launch.loopId}:${launch.cycleId}`;
+      if (acceptingLaunch.current === key) return;
+      acceptingLaunch.current = key;
+      setBusy(true);
+      setFeedback({
+        tone: 'info',
+        title: 'Recebendo a missão',
+        message: 'Confirmando aplicação, ambiente e permissões com a Voidr.',
+      });
+      try {
+        const accepted = await window.voidrCapture.capture.acceptLaunch(launch, runtime);
+        setLaunchResolution(accepted.resolution);
+        if (accepted.status) setStatus(accepted.status);
+        setMode(accepted.resolution.surface);
+        if (accepted.resolution.surface === 'mobile') {
+          setVerificationId(accepted.resolution.cycleId);
+          setMobileContext({
+            loopId: accepted.resolution.loopId,
+            cycleId: accepted.resolution.cycleId,
+          });
+          setMobileLoops([
+            {
+              verificationId: accepted.resolution.cycleId,
+              mission: accepted.resolution.mission,
+              applicationType: 'MOBILE',
+            },
+          ]);
+        }
+        setFeedback({
+          tone: 'success',
+          title: 'Missão preparada',
+          message:
+            accepted.resolution.surface === 'web'
+              ? 'Revise a aplicação e clique em Iniciar captura.'
+              : accepted.resolution.surface === 'mobile'
+                ? 'Conecte o device e execute a jornada no app.'
+                : 'Revise o endpoint antes de iniciar o proxy local.',
+        });
+      } catch (error) {
+        setFeedback({
+          tone: 'error',
+          title: 'Não foi possível abrir a missão',
+          message: safeError(error),
+        });
+      } finally {
+        acceptingLaunch.current = undefined;
+        setBusy(false);
+      }
+    };
+    const unsubscribe = window.voidrCapture.capture.onLaunch((launch) => void accept(launch));
+    void window.voidrCapture.capture.pendingLaunch().then((launch) => {
+      if (launch) void accept(launch);
+    });
+    return unsubscribe;
+  }, [runtime]);
 
   useEffect(() => {
     const { localDevKey: _ephemeralSecret, ...persistableRuntime } = runtime;
@@ -266,6 +339,7 @@ function App() {
             tabs={[
               { value: 'web', label: 'Web', icon: <Monitor size={14} /> },
               { value: 'mobile', label: 'Android', icon: <Smartphone size={14} /> },
+              { value: 'api', label: 'API', icon: <Braces size={14} /> },
             ]}
           />
 
@@ -281,7 +355,7 @@ function App() {
                 <Button variant="primary" size="lg" icon={busy ? <Loader2 className="spin" size={14} /> : <Play size={14} />} disabled={busy || !recordingUrl.trim()} onClick={prepareAndStart}>Iniciar captura</Button>
               </div>
             </Panel>
-          ) : (
+          ) : mode === 'mobile' ? (
             <Panel className="capture-primary-panel mobile-flow" title="Capture um app Android" subtitle="Conecte o device, execute a jornada e envie a captura para a verificação.">
               <div className={`mobile-step${selectedDevice ? ' complete' : ' active'}`}>
                 <StepNumber number={1} complete={Boolean(selectedDevice)} />
@@ -318,6 +392,31 @@ function App() {
                 </div>
               </div>
             </Panel>
+          ) : (
+            <Panel
+              className="capture-primary-panel"
+              title="Capture uma API"
+              subtitle="O Voidr Capture vincula requests e traces diretamente ao Cycle, sem criar replay visual falso."
+            >
+              <div className="capture-form">
+                <label>Endpoint da verificação</label>
+                <input
+                  value={launchResolution?.surface === 'api' ? launchResolution.targetUrl : ''}
+                  readOnly
+                  placeholder="Abra um Cycle de API pelo Voidr ou pelo harness"
+                />
+                <div className="capture-trust-row">
+                  <span><Check size={12} /> Headers sensíveis redigidos</span>
+                  <span><Check size={12} /> Bodies persistidos por referência</span>
+                </div>
+                <Button variant="primary" size="lg" icon={<Network size={14} />} disabled>
+                  Proxy local em preparação
+                </Button>
+                <p className="capture-inline-note">
+                  O Cycle já foi entregue ao app. A interceptação HTTP/HTTPS permanece indisponível até o adapter de proxy e a gestão de CA passarem pelo gate de segurança.
+                </p>
+              </div>
+            </Panel>
           )}
 
           <section className="capture-utility-row">
@@ -341,6 +440,7 @@ function App() {
             </div>
           )}
           <div className="dock-actions">
+            {status.stage === 'ready' && <Button size="sm" variant="primary" icon={<Play size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.startWeb(); })}>Iniciar captura</Button>}
             {recording && <Button size="sm" variant={noteOpen ? 'primary' : 'secondary'} icon={<MessageSquare size={13} />} onClick={() => setNoteOpen((value) => !value)}>Nota</Button>}
             {recording && <Button size="sm" variant={audio ? 'danger' : 'secondary'} icon={audio ? <Square size={12} /> : <Mic size={13} />} disabled={busy} onClick={toggleVoice}>{audio ? 'Enviar voz' : 'Voz'}</Button>}
             {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Finalizar</Button>}
@@ -370,7 +470,7 @@ function App() {
 
 function FinalizationProgress({ stage, agentName }: { stage: CaptureStatus['stage']; agentName?: string }) {
   const active = stage === 'stopping' ? 0 : stage === 'sealed' ? 2 : stage === 'attaching' ? 3 : 3;
-  const labels = finalizationStages.map((label, index) => index === finalizationStages.length - 1 && agentName ? `Entregando ao ${agentName}` : label);
+  const labels = finalizationStages.map((label, index) => index === finalizationStages.length - 1 && agentName ? `Preparando retorno ao ${agentName}` : label);
   return (
     <div className="finalization-progress" aria-label="Progresso da finalização">
       {labels.map((label, index) => (

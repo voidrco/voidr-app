@@ -1,12 +1,19 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { z } from 'zod';
 import type {
   AndroidDevice,
   CaptureStatus,
+  DesktopCaptureLaunch,
+  DesktopCaptureResolution,
   LocalRuntimeConfig,
   MobileAttachInput,
   PrepareWebInput,
 } from '@voidr/capture-contracts';
-import { captureStatusSchema } from '@voidr/capture-contracts';
+import {
+  captureStatusSchema,
+  desktopCaptureLaunchSchema,
+  desktopCaptureResolutionSchema,
+} from '@voidr/capture-contracts';
 
 type Unsubscribe = () => void;
 
@@ -15,9 +22,30 @@ const invokeStatus = (channel: string, input?: unknown): Promise<CaptureStatus> 
     captureStatusSchema.parse(value),
   );
 
+const launchAcceptanceSchema = z.object({
+  resolution: desktopCaptureResolutionSchema,
+  status: captureStatusSchema.optional(),
+});
+
+export interface CaptureLaunchAcceptance {
+  resolution: DesktopCaptureResolution;
+  status?: CaptureStatus;
+}
+
 const api = {
   capture: {
     status: (): Promise<CaptureStatus> => invokeStatus('capture:status'),
+    pendingLaunch: (): Promise<DesktopCaptureLaunch | null> =>
+      ipcRenderer.invoke('capture:pending-launch').then((value) =>
+        value == null ? null : desktopCaptureLaunchSchema.parse(value),
+      ),
+    acceptLaunch: (
+      launch: DesktopCaptureLaunch,
+      runtime: LocalRuntimeConfig,
+    ): Promise<CaptureLaunchAcceptance> =>
+      ipcRenderer
+        .invoke('capture:accept-launch', { launch, runtime })
+        .then((value) => launchAcceptanceSchema.parse(value)),
     prepareWeb: (input: PrepareWebInput): Promise<CaptureStatus> =>
       invokeStatus('capture:prepare-web', input),
     startWeb: (): Promise<CaptureStatus> => invokeStatus('capture:start-web'),
@@ -38,6 +66,14 @@ const api = {
       };
       ipcRenderer.on('capture:status-changed', listener);
       return () => ipcRenderer.removeListener('capture:status-changed', listener);
+    },
+    onLaunch: (callback: (launch: DesktopCaptureLaunch) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = desktopCaptureLaunchSchema.safeParse(value);
+        if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on('capture:launch-received', listener);
+      return () => ipcRenderer.removeListener('capture:launch-received', listener);
     },
   },
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
