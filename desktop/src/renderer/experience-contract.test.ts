@@ -3,14 +3,27 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const appSource = readFileSync(fileURLToPath(new URL('./App.tsx', import.meta.url)), 'utf8');
+const mainSource = readFileSync(
+  fileURLToPath(new URL('../main/index.ts', import.meta.url)),
+  'utf8',
+);
+const workspaceSource = readFileSync(
+  fileURLToPath(new URL('./WorkspaceHome.tsx', import.meta.url)),
+  'utf8',
+);
 const styleSource = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8');
 const entrySource = readFileSync(fileURLToPath(new URL('./src.tsx', import.meta.url)), 'utf8');
+const htmlSource = readFileSync(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
 const designSystemSource = readFileSync(
   fileURLToPath(new URL('../../../packages/capture-design-system/src/index.tsx', import.meta.url)),
   'utf8',
 );
 const designSystemStyles = readFileSync(
   fileURLToPath(new URL('../../../packages/capture-design-system/src/styles.css', import.meta.url)),
+  'utf8',
+);
+const presentationSource = readFileSync(
+  fileURLToPath(new URL('../../../packages/capture-presentation/src/index.ts', import.meta.url)),
   'utf8',
 );
 
@@ -42,6 +55,20 @@ describe('desktop experience contract', () => {
     }
   });
 
+  it('makes Loops the operational Home with real cycles, participants and evidence', () => {
+    expect(appSource).toContain("useState<'loops' | 'capture'>('loops')");
+    expect(appSource).toContain('<WorkspaceHome');
+    expect(workspaceSource).toContain('workspace.listLoops(runtime)');
+    expect(workspaceSource).toMatch(/workspace\s*\.listCycles\(runtime, selectedLoopId\)/);
+    expect(workspaceSource).toMatch(
+      /workspace\s*\.getCycle\(runtime, selectedLoopId, selectedCycleId\)/,
+    );
+    expect(workspaceSource).toContain('Iniciar meu ciclo');
+    expect(workspaceSource).toContain("useState<EvidenceFilter>('highlights')");
+    expect(workspaceSource).toContain('Destaques');
+    expect(workspaceSource).not.toContain('VAP');
+  });
+
   it('uses design-system tokens instead of raw colors in renderer styles', () => {
     expect(styleSource).not.toMatch(/#[0-9a-f]{3,8}\b/i);
     expect(styleSource).toContain('var(--background)');
@@ -60,10 +87,69 @@ describe('desktop experience contract', () => {
     expect(appSource).not.toContain("JSON.stringify(runtime));");
   });
 
+  it('keeps the workspace scoped to the organization carried by a local launch', () => {
+    expect(appSource).toContain('organizationId: launch.organizationId');
+    expect(appSource).toContain('capture.acceptLaunch(launch, launchRuntime)');
+    expect(appSource).toContain('setRuntime(launchRuntime)');
+  });
+
+  it('starts a Web Cycle immediately and identifies its human owner during capture', () => {
+    expect(mainSource).toContain("if (status.stage === 'ready') status = await webCapture!.start()");
+    expect(appSource).toContain('cycleParticipantLabel(cycleParticipant, cycleStartedAt)');
+    expect(appSource).toContain('A captura começou automaticamente e o tempo já está contando.');
+    expect(appSource).toContain('Ciclo de ${participantLabel}');
+    expect(appSource).toContain('referrerPolicy="no-referrer"');
+    expect(htmlSource).toContain("img-src 'self' data: https:");
+  });
+
   it('claims harness receipt only after the authoritative acknowledgement', () => {
     expect(appSource).toContain("harnessDeliveryState === 'acknowledged'");
     expect(appSource).toContain('recebeu o contexto citado');
     expect(appSource).toContain('Aguardando o ${agentName} confirmar o contexto');
     expect(appSource).not.toContain('recebeu a confirmação e já pode continuar');
+  });
+
+  it('reserves native target space for notes and captured-context details', () => {
+    expect(appSource).toContain('capture.setControlPanel(controlPanelMode)');
+    expect(appSource).toContain('capture-shell-note');
+    expect(appSource).toContain('capture-shell-evidence');
+    expect(appSource).toContain('<EvidenceInspector');
+    expect(styleSource).toContain('.capture-shell-note');
+    expect(styleSource).toContain('.capture-shell-evidence');
+    expect(styleSource).toContain('.dock-evidence');
+  });
+
+  it('makes element and screen capture immediate while keeping context optional', () => {
+    expect(appSource).toContain("onClick={() => void annotate('element')}");
+    expect(appSource).toContain("onClick={() => void annotate('screen')}");
+    expect(appSource).toContain('Selecionar elemento');
+    expect(appSource).toContain('Capturar tela');
+    expect(appSource).toContain('O contexto é opcional.');
+    expect(appSource).toContain("suppliedNote || fallbackNote");
+    expect(appSource).not.toContain('disabled={busy || !note.trim()}');
+    expect(appSource).not.toContain('>Salvar</Button>');
+    expect(styleSource).toContain('.annotation-action.primary');
+  });
+
+  it('makes every automatic evidence category inspectable from the recording dock', () => {
+    expect(appSource).toContain("label: 'Requisições'");
+    expect(appSource).toContain('title={`Ver ${label.toLowerCase()}`}');
+    expect(appSource).toContain("signal.category === evidenceOpen");
+    expect(appSource).toContain('método, status e duração');
+  });
+
+  it('presents four honest, status-driven finalization stages with delayed-state copy', () => {
+    for (const label of [
+      'Consolidando jornada',
+      'Preservando captura',
+      'Indexando evidências',
+      'Preparando revisão',
+    ]) {
+      expect(presentationSource).toContain(label);
+    }
+    expect(appSource).toContain("stage === 'stopping' ? 0");
+    expect(appSource).toContain('elapsedMs >= 15_000');
+    expect(appSource).toContain('Captura segura.');
+    expect(styleSource).toContain('.finalization-step.active');
   });
 });

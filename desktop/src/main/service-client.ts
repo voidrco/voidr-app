@@ -2,16 +2,25 @@ import { z } from 'zod';
 import {
   desktopCaptureLaunchSchema,
   desktopCaptureResolutionSchema,
+  desktopLoopCycleDetailSchema,
+  desktopLoopCycleSummarySchema,
+  desktopLoopSummarySchema,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
   redactText,
   type DesktopCaptureLaunch,
   type DesktopCaptureResolution,
+  type DesktopCycleParticipant,
+  type DesktopLoopApplicationType,
+  type DesktopLoopCycleDetail,
+  type DesktopLoopCycleSummary,
+  type DesktopLoopEvidenceItem,
+  type DesktopLoopSummary,
   type LocalRuntimeConfig,
   type MobileAttachInput,
   type SafeWebContext,
 } from '@voidr/capture-contracts';
-import type { SecretLoopLaunch } from './deep-link';
+import { parseDesktopCaptureLaunch, type SecretLoopLaunch } from './deep-link';
 
 const validationSchema = z.object({
   valid: z.literal(true),
@@ -35,13 +44,23 @@ const validationSchema = z.object({
       lifecycleVersion: z.number().int().nonnegative(),
       mission: z.string().optional(),
       targetUrl: z.string().url().optional(),
-      harness: z.object({ name: z.string().optional() }).passthrough().optional(),
+      participant: z
+        .object({
+          name: z.string().optional(),
+          email: z.string().optional(),
+          role: z.string().optional(),
+          picture: z.string().optional(),
+        })
+        .passthrough()
+        .nullish(),
+      createdAt: z.string().datetime().optional(),
+      harness: z.object({ name: z.string().optional() }).passthrough().nullish(),
       harnessDelivery: z
         .object({
           state: z.enum(['waiting', 'preparing', 'available', 'acknowledged', 'failed']),
         })
         .passthrough()
-        .optional(),
+        .nullish(),
     })
     .passthrough(),
 });
@@ -67,6 +86,87 @@ export interface SecretWebAuthorization {
 
 type Json = Record<string, unknown>;
 const MAX_CONTROL_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+function record(value: unknown): Json {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
+}
+
+function list(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown, fallback = '', maxLength = 4_000): string {
+  return typeof value === 'string' ? redactText(value).trim().slice(0, maxLength) : fallback;
+}
+
+function integerValue(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isoDate(value: unknown): string | null {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return null;
+  return new Date(value).toISOString();
+}
+
+function applicationType(value: unknown): DesktopLoopApplicationType {
+  return ['WEB', 'MOBILE', 'API', 'VOICE'].includes(String(value).toUpperCase())
+    ? (String(value).toUpperCase() as DesktopLoopApplicationType)
+    : 'WEB';
+}
+
+function participantName(value: unknown): string | null {
+  const participant = record(value);
+  return (
+    stringValue(participant.name, '', 160) ||
+    stringValue(participant.email, '', 160) ||
+    stringValue(participant.actorName, '', 160) ||
+    null
+  );
+}
+
+function participantAvatarUrl(value: unknown): string | null {
+  const picture = stringValue(record(value).picture, '', 16_384);
+  if (!picture) return null;
+  try {
+    const url = new URL(picture);
+    return ['https:', 'http:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function participantRole(value: unknown): string | null {
+  return stringValue(record(value).role, '', 120) || null;
+}
+
+function participantIdentity(value: unknown): DesktopCycleParticipant | null {
+  const name = participantName(value);
+  if (!name) return null;
+  return {
+    name,
+    role: participantRole(value),
+    picture: participantAvatarUrl(value),
+  };
+}
+
+function evidenceKind(value: unknown): DesktopLoopEvidenceItem['kind'] {
+  const kind = String(value).toLowerCase();
+  if (kind === 'recording' || kind === 'replay') return 'replay';
+  if (kind === 'annotation') return 'annotation';
+  if (kind === 'screenshot' || kind === 'frame' || kind === 'crop') return 'screenshot';
+  if (kind === 'network' || kind === 'request') return 'network';
+  if (kind === 'console' || kind === 'console_error') return 'console';
+  if (kind === 'transcript' || kind === 'voice') return 'transcript';
+  return 'action';
+}
+
+function evidenceTone(kind: DesktopLoopEvidenceItem['kind'], label: string): DesktopLoopEvidenceItem['tone'] {
+  if (kind === 'console' || /\b(?:4\d\d|5\d\d|fail|error)\b/i.test(label)) return 'error';
+  if (kind === 'annotation' || kind === 'transcript') return 'warning';
+  if (kind === 'replay' || kind === 'screenshot') return 'success';
+  return 'neutral';
+}
 
 function messageFrom(value: unknown, fallback: string): string {
   if (!value || typeof value !== 'object') return fallback;
@@ -121,6 +221,123 @@ export class VoidrServiceClient {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
   }
 
+  async listLoops(): Promise<DesktopLoopSummary[]> {
+    const values = await jsonRequest<unknown[]>(`${this.runtime.serviceUrl}/${this.loopRoot()}`, {
+      headers: this.localHeaders(),
+    });
+    return values.map((value) => {
+      const item = record(value);
+      const latest = record(item.latestCycle);
+      return desktopLoopSummarySchema.parse({
+        id: stringValue(item.id),
+        name: stringValue(item.name, 'Loop sem nome', 300),
+        applicationId: stringValue(item.applicationId),
+        applicationType: applicationType(item.applicationType),
+        targetUrl: stringValue(item.targetUrl),
+        environment: stringValue(item.environmentSlug ?? item.environment, 'default'),
+        status: stringValue(item.status, 'recording', 80),
+        cycleCount: integerValue(item.cycle),
+        sessionsRecorded: integerValue(item.sessionsRecorded),
+        updatedAt: isoDate(item.updatedAt),
+        latestCycle: item.latestCycle
+          ? {
+              id: stringValue(latest.id),
+              number: Math.max(1, integerValue(latest.number)),
+              status: stringValue(latest.status, 'recording', 80),
+              updatedAt: isoDate(latest.updatedAt),
+            }
+          : null,
+      });
+    });
+  }
+
+  async listLoopCycles(loopId: string): Promise<DesktopLoopCycleSummary[]> {
+    const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
+    const values = await jsonRequest<unknown[]>(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}/cycles`,
+      { headers: this.localHeaders() },
+    );
+    return values.map((value) => {
+      const item = record(value);
+      return desktopLoopCycleSummarySchema.parse({
+        id: stringValue(item.cycleId ?? item.verificationId),
+        loopId: stringValue(item.loopId, safeLoopId),
+        number: Math.max(1, integerValue(item.cycleNumber)),
+        status: stringValue(item.visibleStatus ?? item.status, 'recording', 80),
+        mission: stringValue(item.mission, 'Executar a jornada definida para este Loop', 1_000),
+        environment: stringValue(item.environment, 'default'),
+        applicationType: applicationType(item.applicationType),
+        participant: participantName(item.participant),
+        participantRole: participantRole(item.participant),
+        participantAvatarUrl: participantAvatarUrl(item.participant),
+        artifactReady: item.artifactReady === true,
+        diagnosisReady: item.diagnosisReady === true,
+        updatedAt: isoDate(item.updatedAt),
+        createdAt: isoDate(item.createdAt),
+      });
+    });
+  }
+
+  async getLoopCycle(loopId: string, cycleId: string): Promise<DesktopLoopCycleDetail> {
+    const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
+    const safeCycleId = z.string().uuid().parse(cycleId);
+    const value = await jsonRequest<Json>(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}` +
+        `/cycles/${encodeURIComponent(safeCycleId)}`,
+      { headers: this.localHeaders() },
+    );
+    const context = record(value.context);
+    const counts = record(context.counts);
+    const evidence = list(context.evidence ?? value.evidence)
+      .slice(0, 200)
+      .map((raw, index) => {
+        const item = record(raw);
+        const kind = evidenceKind(item.kind);
+        const title = stringValue(
+          item.label,
+          kind === 'replay' ? 'Replay da sessão' : 'Evidência',
+          240,
+        );
+        const detail = stringValue(item.detail || item.note, '', 1_000) || null;
+        return {
+          id: `${kind}-${index + 1}`,
+          kind,
+          atMs: item.atMs == null ? null : integerValue(item.atMs),
+          title,
+          detail,
+          tone: evidenceTone(kind, `${title} ${detail ?? ''}`),
+        } satisfies DesktopLoopEvidenceItem;
+      });
+    return desktopLoopCycleDetailSchema.parse({
+      loopId: stringValue(value.loopId, safeLoopId),
+      cycleId: stringValue(value.id, safeCycleId),
+      cycleNumber: Math.max(1, integerValue(value.number ?? context.cycleNumber)),
+      durationMs: integerValue(context.durationMs),
+      replayAvailable: record(context.replay).available === true,
+      counts: {
+        annotations: integerValue(counts.annotations),
+        actions: integerValue(counts.actions),
+        consoleErrors: integerValue(counts.consoleErrors),
+        failedRequests: integerValue(counts.failedRequests),
+        transcriptSegments: integerValue(counts.transcriptSegments),
+      },
+      evidence,
+    });
+  }
+
+  async prepareLoopCycle(loopId: string): Promise<DesktopCaptureLaunch> {
+    const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
+    const value = await jsonRequest<Json>(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}/capture`,
+      {
+        method: 'POST',
+        headers: { ...this.localHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+      },
+    );
+    return parseDesktopCaptureLaunch(stringValue(value.launchUrl));
+  }
+
   async resolveDesktopLaunch(input: unknown): Promise<ResolvedDesktopHandoff> {
     const launch: DesktopCaptureLaunch = desktopCaptureLaunchSchema.parse(input);
     const root = this.runtime.localAdapter ? 'loop-test-dev/scenarios' : 'loop-test/scenarios';
@@ -129,7 +346,11 @@ export class VoidrServiceClient {
         `/cycles/${encodeURIComponent(launch.cycleId)}/capture-handoff`,
       { headers: this.localHeaders(launch.organizationId) },
     );
-    const handoff = desktopHandoffSchema.parse(value);
+    const handoff = desktopHandoffSchema.parse({
+      ...value,
+      participant: participantIdentity(value.participant),
+      cycleStartedAt: isoDate(value.cycleStartedAt),
+    });
     if (
       handoff.loopId !== launch.loopId ||
       handoff.cycleId !== launch.cycleId ||
@@ -176,6 +397,10 @@ export class VoidrServiceClient {
         verificationGeneration: verification.generation,
         lifecycleVersion: verification.lifecycleVersion,
         ...(verification.cycleNumber ? { cycleNumber: verification.cycleNumber } : {}),
+        ...(verification.participant
+          ? { participant: participantIdentity(verification.participant) }
+          : {}),
+        ...(verification.createdAt ? { cycleStartedAt: verification.createdAt } : {}),
         ...(verification.harness?.name ? { harnessName: verification.harness.name } : {}),
         ...(verification.harnessDelivery?.state
           ? { harnessDeliveryState: verification.harnessDelivery.state }
@@ -362,5 +587,9 @@ export class VoidrServiceClient {
       'x-voidr-dev-key': this.runtime.localDevKey,
       'x-voidr-organization-id': organizationId,
     };
+  }
+
+  private loopRoot(): string {
+    return this.runtime.localAdapter ? 'loop-test-dev/scenarios' : 'loop-test/scenarios';
   }
 }

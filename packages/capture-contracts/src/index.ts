@@ -62,6 +62,14 @@ export const desktopCaptureLaunchSchema = z.object({
 });
 export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
 
+/** Canonical Voidr profile projected for a human-owned Cycle. */
+export const desktopCycleParticipantSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  role: z.string().trim().min(1).max(120).nullable(),
+  picture: trustedWebUrlSchema.nullable(),
+});
+export type DesktopCycleParticipant = z.infer<typeof desktopCycleParticipantSchema>;
+
 /** Safe projection returned to the control renderer after main-process resolution. */
 export const desktopCaptureResolutionSchema = z.object({
   version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
@@ -74,6 +82,8 @@ export const desktopCaptureResolutionSchema = z.object({
   environment: boundedId,
   mission: z.string().trim().min(1).max(1_000),
   targetUrl: trustedWebUrlSchema,
+  participant: desktopCycleParticipantSchema.nullable(),
+  cycleStartedAt: z.string().datetime(),
   harnessName: z.string().trim().max(120).optional(),
 });
 export type DesktopCaptureResolution = z.infer<typeof desktopCaptureResolutionSchema>;
@@ -160,6 +170,8 @@ export const safeWebContextSchema = z.object({
   verificationGeneration: opaqueId,
   lifecycleVersion: z.number().int().nonnegative(),
   cycleNumber: z.number().int().positive().optional(),
+  participant: desktopCycleParticipantSchema.nullable().optional(),
+  cycleStartedAt: z.string().datetime().optional(),
   harnessName: z.string().trim().max(120).optional(),
   harnessDeliveryState: harnessDeliveryStateSchema.optional(),
 });
@@ -179,6 +191,121 @@ export const annotationInputSchema = z.object({
   note: z.string().trim().min(1).max(1000),
 });
 export type AnnotationInput = z.infer<typeof annotationInputSchema>;
+
+export const capturedSignalCategorySchema = z.enum([
+  'pages',
+  'clicks',
+  'requests',
+  'errors',
+  'notes',
+  'voiceNotes',
+]);
+export type CapturedSignalCategory = z.infer<typeof capturedSignalCategorySchema>;
+
+/**
+ * Small, secret-free projection used by the desktop control surface. Raw
+ * headers, bodies, screenshots and replay payloads stay in the evidence
+ * stores and are never copied into renderer state.
+ */
+export const capturedSignalSchema = z.object({
+  id: opaqueId,
+  category: capturedSignalCategorySchema,
+  atMs: z.number().int().nonnegative(),
+  title: z.string().trim().min(1).max(240),
+  detail: z.string().trim().max(1_000).optional(),
+  tone: z.enum(['neutral', 'success', 'warning', 'error']).default('neutral'),
+});
+export type CapturedSignal = z.infer<typeof capturedSignalSchema>;
+
+/**
+ * Secret-free workspace projections consumed by the desktop Home. The main
+ * process deliberately reduces Loop API responses before crossing IPC: the
+ * renderer receives product context and evidence labels, never storage refs,
+ * signed assets, request payloads or authorization material.
+ */
+export const desktopLoopApplicationTypeSchema = z.enum(['WEB', 'MOBILE', 'API', 'VOICE']);
+export type DesktopLoopApplicationType = z.infer<typeof desktopLoopApplicationTypeSchema>;
+
+export const desktopLoopCycleStatusSchema = z.string().trim().min(1).max(80);
+export type DesktopLoopCycleStatus = z.infer<typeof desktopLoopCycleStatusSchema>;
+
+export const desktopLoopSummarySchema = z.object({
+  id: boundedId,
+  name: z.string().trim().min(1).max(300),
+  applicationId: boundedId,
+  applicationType: desktopLoopApplicationTypeSchema,
+  targetUrl: z.string().trim().max(16_384),
+  environment: boundedId,
+  status: desktopLoopCycleStatusSchema,
+  cycleCount: z.number().int().nonnegative(),
+  sessionsRecorded: z.number().int().nonnegative(),
+  updatedAt: z.string().datetime().nullable(),
+  latestCycle: z
+    .object({
+      id: opaqueId,
+      number: z.number().int().positive(),
+      status: desktopLoopCycleStatusSchema,
+      updatedAt: z.string().datetime().nullable(),
+    })
+    .nullable(),
+});
+export type DesktopLoopSummary = z.infer<typeof desktopLoopSummarySchema>;
+
+export const desktopLoopCycleSummarySchema = z.object({
+  id: opaqueId,
+  loopId: boundedId,
+  number: z.number().int().positive(),
+  status: desktopLoopCycleStatusSchema,
+  mission: z.string().trim().min(1).max(1_000),
+  environment: boundedId,
+  applicationType: desktopLoopApplicationTypeSchema,
+  participant: z.string().trim().min(1).max(160).nullable(),
+  participantRole: z.string().trim().min(1).max(120).nullable(),
+  participantAvatarUrl: trustedWebUrlSchema.nullable(),
+  artifactReady: z.boolean(),
+  diagnosisReady: z.boolean(),
+  updatedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime().nullable(),
+});
+export type DesktopLoopCycleSummary = z.infer<typeof desktopLoopCycleSummarySchema>;
+
+export const desktopLoopEvidenceKindSchema = z.enum([
+  'replay',
+  'annotation',
+  'screenshot',
+  'network',
+  'console',
+  'transcript',
+  'action',
+]);
+export type DesktopLoopEvidenceKind = z.infer<typeof desktopLoopEvidenceKindSchema>;
+
+export const desktopLoopEvidenceItemSchema = z.object({
+  id: boundedId,
+  kind: desktopLoopEvidenceKindSchema,
+  atMs: z.number().int().nonnegative().nullable(),
+  title: z.string().trim().min(1).max(240),
+  detail: z.string().trim().max(1_000).nullable(),
+  tone: z.enum(['neutral', 'success', 'warning', 'error']),
+});
+export type DesktopLoopEvidenceItem = z.infer<typeof desktopLoopEvidenceItemSchema>;
+
+export const desktopLoopCycleDetailSchema = z.object({
+  loopId: boundedId,
+  cycleId: opaqueId,
+  cycleNumber: z.number().int().positive(),
+  durationMs: z.number().int().nonnegative(),
+  replayAvailable: z.boolean(),
+  counts: z.object({
+    annotations: z.number().int().nonnegative(),
+    actions: z.number().int().nonnegative(),
+    consoleErrors: z.number().int().nonnegative(),
+    failedRequests: z.number().int().nonnegative(),
+    transcriptSegments: z.number().int().nonnegative(),
+  }),
+  evidence: z.array(desktopLoopEvidenceItemSchema).max(200),
+});
+export type DesktopLoopCycleDetail = z.infer<typeof desktopLoopCycleDetailSchema>;
 
 export const androidDeviceSchema = z.object({
   serial: boundedId,
@@ -218,6 +345,7 @@ export const captureStatusSchema = z.object({
     notes: z.number().int().nonnegative(),
     voiceNotes: z.number().int().nonnegative(),
   }),
+  recentSignals: z.array(capturedSignalSchema).max(60).optional(),
   message: z.string().max(500).optional(),
   errorCode: z.string().max(100).optional(),
 });

@@ -3,7 +3,10 @@ import {
   CAPTURE_HOST_VERSION,
   VOIDR_CAPTURE_LAUNCH_VERSION,
   captureEnvelopeSchema,
+  captureStatusSchema,
   desktopCaptureLaunchSchema,
+  desktopCaptureResolutionSchema,
+  desktopLoopCycleDetailSchema,
   isTrustedWebUrl,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
@@ -52,6 +55,29 @@ describe('CAPTURE-HOST/1 contracts', () => {
     ).toThrow();
   });
 
+  it('carries only the canonical participant projection into the desktop handoff', () => {
+    const resolution = desktopCaptureResolutionSchema.parse({
+      version: VOIDR_CAPTURE_LAUNCH_VERSION,
+      captureAdapter: 'voidr_app',
+      surface: 'web',
+      loopId: 'lts_checkout',
+      cycleId: '88ad0919-9754-4787-8a43-fc4bf79e52bd',
+      cycleNumber: 2,
+      applicationId: 'app_checkout',
+      environment: 'local',
+      mission: 'Concluir o checkout',
+      targetUrl: 'http://localhost:8080/',
+      participant: {
+        name: 'Milson Ramos de Carvalho Júnior',
+        role: 'Software Developer',
+        picture: 'https://images.example/milson.png',
+      },
+      cycleStartedAt: '2026-08-17T15:45:00.000Z',
+    });
+    expect(resolution.participant?.role).toBe('Software Developer');
+    expect(JSON.stringify(resolution)).not.toMatch(/email|actorId|token|authorization/i);
+  });
+
   it('removes launch capabilities from URLs and logs', () => {
     const safe = redactUrl(
       'http://localhost:8080/?voidr_record=1&token=secret#voidr-loop-v2=secret',
@@ -93,5 +119,67 @@ describe('CAPTURE-HOST/1 contracts', () => {
       localRuntimeConfigSchema.safeParse({ ...local, collectorUrl: 'http://localhost:3100?next=x' })
         .success,
     ).toBe(false);
+  });
+
+  it('bounds the renderer evidence projection without accepting raw request payloads', () => {
+    const status = captureStatusSchema.parse({
+      stage: 'recording',
+      elapsedMs: 320,
+      evidence: { pages: 1, clicks: 0, requests: 1, errors: 0, notes: 0, voiceNotes: 0 },
+      recentSignals: [
+        {
+          id: crypto.randomUUID(),
+          category: 'requests',
+          atMs: 280,
+          title: 'GET · HTTP 200',
+          detail: 'http://localhost:8080/checkout · 18 ms · document',
+          tone: 'success',
+        },
+      ],
+    });
+    expect(status.recentSignals?.[0]?.category).toBe('requests');
+    expect(JSON.stringify(status.recentSignals)).not.toMatch(/authorization|cookie|postData/i);
+    expect(() =>
+      captureStatusSchema.parse({
+        ...status,
+        recentSignals: Array.from({ length: 61 }, (_, index) => ({
+          id: `signal-${index}`,
+          category: 'requests',
+          atMs: index,
+          title: 'GET · HTTP 200',
+        })),
+      }),
+    ).toThrow();
+  });
+
+  it('keeps the desktop Loop detail bounded and free of raw storage references', () => {
+    const detail = desktopLoopCycleDetailSchema.parse({
+      loopId: 'lts_checkout',
+      cycleId: '88ad0919-9754-4787-8a43-fc4bf79e52bd',
+      cycleNumber: 2,
+      durationMs: 4_200,
+      replayAvailable: true,
+      counts: { annotations: 1, actions: 4, consoleErrors: 0, failedRequests: 0, transcriptSegments: 0 },
+      evidence: [{
+        id: 'annotation-1',
+        kind: 'annotation',
+        atMs: 920,
+        title: 'Botão não respondeu',
+        detail: null,
+        tone: 'warning',
+      }],
+    });
+    expect(JSON.stringify(detail)).not.toMatch(/evidenceRef|signedUrl|authorization|cookie/i);
+    expect(() => desktopLoopCycleDetailSchema.parse({
+      ...detail,
+      evidence: Array.from({ length: 201 }, (_, index) => ({
+        id: `evidence-${index}`,
+        kind: 'action',
+        atMs: index,
+        title: 'Evento',
+        detail: null,
+        tone: 'neutral',
+      })),
+    })).toThrow();
   });
 });

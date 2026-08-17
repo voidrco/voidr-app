@@ -91,4 +91,42 @@ describe('Electron security contract', () => {
     expect(forgeSource).toContain('NSMicrophoneUsageDescription');
     expect(forgeSource).toContain('somente quando você grava uma nota de voz');
   });
+
+  it('resizes the native target instead of relying on renderer z-index', () => {
+    expect(mainSource).toContain("z.enum(['default', 'annotation', 'evidence', 'finalizing'])");
+    expect(mainSource).toContain("ipcMain.handle('capture:set-control-panel'");
+    expect(mainSource).toContain('CONTROL_PANEL_HEIGHT[controlPanelMode]');
+    expect(mainSource).toContain('webCapture?.resize()');
+  });
+
+  it('captures initial, live, redirected and failed network activity without raw secrets', () => {
+    expect(captureSource).toContain("performance.getEntriesByType('resource')");
+    expect(captureSource).toContain("method === 'Network.requestWillBeSent'");
+    expect(captureSource).toContain('parameters.redirectResponse');
+    expect(captureSource).toContain("method === 'Network.loadingFailed'");
+    expect(captureSource).toContain('captureResources: true');
+    expect(captureSource).toContain('captureResourcesMaxPerSession: 200');
+    expect(captureSource).not.toContain("'voidr.desktop.request'");
+    expect(captureSource).not.toContain('request.headers');
+    expect(captureSource).not.toContain('request.postData');
+  });
+
+  it('never leaves finalization on an unbounded promise or abandoned processing state', () => {
+    expect(captureSource).toContain('COLLECTOR_STOP_TIMEOUT_MS = 25_000');
+    expect(captureSource).toContain('await withTimeout(');
+    expect(captureSource).toContain('#observeCycleReadiness');
+    expect(captureSource).toContain("'WEB_PROCESSING_TIMEOUT'");
+    expect(captureSource).toContain('resumedInBackground: true');
+  });
+
+  it('bounds target loading and retries once without deleting the user session', () => {
+    expect(captureSource).toContain('TARGET_LOAD_TIMEOUT_MS = 15_000');
+    expect(captureSource).toContain('await this.#loadTargetUrl(');
+    expect(captureSource).toContain('this.#view.webContents.session.clearCache()');
+    expect(captureSource).toContain("type: 'web.load-retry'");
+    expect(captureSource).not.toContain("clearStorageData({ storages: ['cookies']");
+    expect(captureSource.indexOf('await this.#loadTargetUrl(')).toBeLessThan(
+      captureSource.indexOf('this.window.contentView.addChildView(this.#view)'),
+    );
+  });
 });

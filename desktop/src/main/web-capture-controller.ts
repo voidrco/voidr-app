@@ -8,6 +8,7 @@ import {
   prepareWebInputSchema,
   redactText,
   type AnnotationInput,
+  type CapturedSignal,
   type CaptureStatus,
   type CollectorStopReceipt,
   type HarnessDeliveryState,
@@ -25,6 +26,8 @@ import { type SecretWebAuthorization, VoidrServiceClient } from './service-clien
 
 const COLLECTOR_WORLD = 1004;
 const MAX_COLLECTOR_SCRIPT_BYTES = 5 * 1024 * 1024;
+const COLLECTOR_STOP_TIMEOUT_MS = 25_000;
+const TARGET_LOAD_TIMEOUT_MS = 15_000;
 
 type SignalName = 'pages' | 'clicks' | 'requests' | 'errors';
 
@@ -33,11 +36,34 @@ interface SelectedElement {
   rect?: { x: number; y: number; width: number; height: number };
 }
 
+interface NetworkSignal {
+  method: string;
+  url: string;
+  status: number;
+  mimeType?: string;
+  durationMs: number;
+  failure?: string;
+}
+
 function escapeCssIdentifier(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, (character) => {
     const code = character.codePointAt(0)?.toString(16) ?? 'fffd';
     return `\\${code} `;
   });
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export class WebCaptureController {
@@ -51,6 +77,8 @@ export class WebCaptureController {
   #signalTimer?: NodeJS.Timeout;
   #startedAt = 0;
   #requestMeta = new Map<string, { method: string; url: string; startedAt: number }>();
+  #recentSignals: CapturedSignal[] = [];
+  #readinessObserverGeneration?: string;
   #pendingElement?: {
     resolve: (value: SelectedElement) => void;
     reject: (error: Error) => void;
@@ -70,6 +98,7 @@ export class WebCaptureController {
       stage: this.#state.stage,
       elapsedMs,
       evidence: { ...this.#state.evidence },
+      recentSignals: [...this.#recentSignals],
       ...(this.#state.platform ? { platform: this.#state.platform } : {}),
       ...(this.#state.generation ? { generation: this.#state.generation } : {}),
       ...(this.#state.context ? { context: this.#state.context } : {}),
@@ -105,9 +134,11 @@ export class WebCaptureController {
         parsed.runtime.organizationId,
         authorization.safeContext.applicationId,
       );
+      // Load while detached. Mounting an empty native view can block the
+      // protocol handoff on an already-open macOS window.
+      await this.#loadTargetUrl(authorization.safeContext.safeTargetUrl);
       this.window.contentView.addChildView(this.#view);
       this.#view.setBounds(this.bounds());
-      await this.#view.webContents.loadURL(authorization.safeContext.safeTargetUrl);
       this.#setState(
         captureReducer(this.#state, { type: 'PREPARED', context: authorization.safeContext }),
       );
@@ -135,11 +166,17 @@ export class WebCaptureController {
         }),
       );
       await this.#ingestLifecycle('recording.started', { host: 'electron', platform: 'web' });
+      this.#addSignal(
+        'pages',
+        'Página inicial',
+        this.#boundedResourceUrl(this.#view.webContents.getURL()),
+      );
       this.#increment('pages');
       await this.#trackInCollector('voidr.desktop.page', {
         url: this.#boundedResourceUrl(this.#view.webContents.getURL()),
         navigationType: 'initial',
       });
+      await this.#captureExistingNetworkEntries();
       this.#startSignalPolling();
       await this.ledger.append({
         type: 'web.started',
@@ -171,13 +208,14 @@ export class WebCaptureController {
         this.#setState(captureReducer(this.#state, { type: 'STOP' }));
         this.#stopSignalPolling();
         await this.#ingestLifecycle('seal.requested', { host: 'electron' });
-        const raw = (await this.#view.webContents.executeJavaScriptInIsolatedWorld(
-          COLLECTOR_WORLD,
-          [
+        const raw = (await withTimeout(
+          this.#view.webContents.executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [
             {
               code: `Promise.resolve(globalThis.VoidrCollector?.stopAndFlush?.()).then((value) => value ?? null)`,
             },
-          ],
+          ]),
+          COLLECTOR_STOP_TIMEOUT_MS,
+          'A consolidação está demorando mais que o esperado. Seus dados locais continuam preservados.',
         )) as Record<string, unknown> | null;
         if (!raw) throw new Error('O collector não retornou o receipt de Stop.');
         const sealedThrough = Number(raw.sealedThrough ?? raw.finalizedThrough ?? raw.finalChunkSeq);
@@ -247,6 +285,11 @@ export class WebCaptureController {
       evidenceRef,
       timestampMs: Math.max(0, Date.now() - this.#startedAt),
     });
+    this.#addSignal(
+      'notes',
+      annotation.kind === 'element' ? 'Nota em elemento' : 'Nota na tela',
+      redactText(annotation.note).slice(0, 1_000),
+    );
     this.#increment('notes');
     return { evidenceRef };
   }
@@ -321,12 +364,19 @@ export class WebCaptureController {
       startedAtMs: input.startedAtMs,
       endedAtMs: input.endedAtMs,
     });
+    this.#addSignal(
+      'voiceNotes',
+      transcript ? 'Nota de voz transcrita' : 'Nota de voz capturada',
+      transcript ? redactText(transcript).slice(0, 1_000) : undefined,
+    );
     this.#increment('voiceNotes');
     return { transcript };
   }
 
-  resize(): void {
-    if (this.#view && !this.#view.webContents.isDestroyed()) this.#view.setBounds(this.bounds());
+  resize(): Rectangle | undefined {
+    if (!this.#view || this.#view.webContents.isDestroyed()) return undefined;
+    this.#view.setBounds(this.bounds());
+    return this.#view.getBounds();
   }
 
   async disposeTarget(): Promise<void> {
@@ -348,6 +398,8 @@ export class WebCaptureController {
     this.#collectorScript = undefined;
     this.#stopReceipt = undefined;
     this.#requestMeta.clear();
+    this.#recentSignals = [];
+    this.#readinessObserverGeneration = undefined;
     this.#startedAt = 0;
     if (this.#state.stage !== 'idle') {
       this.#state = { ...initialCaptureState, evidence: { ...initialCaptureState.evidence } };
@@ -406,6 +458,30 @@ export class WebCaptureController {
     return view;
   }
 
+  async #loadTargetUrl(url: string): Promise<void> {
+    if (!this.#view) throw new Error('Target Web ausente.');
+    const load = () =>
+      withTimeout(
+        this.#view!.webContents.loadURL(url),
+        TARGET_LOAD_TIMEOUT_MS,
+        'A aplicação demorou demais para abrir no Voidr Capture.',
+      );
+    try {
+      await load();
+    } catch (firstError) {
+      if (!this.#view || this.#view.webContents.isDestroyed()) throw firstError;
+      this.#view.webContents.stop();
+      await this.#view.webContents.session.clearCache();
+      await this.ledger.append({
+        type: 'web.load-retry',
+        generation: this.#state.generation,
+        stage: 'preparing',
+        data: { reason: firstError instanceof Error ? firstError.message : 'Falha transitória.' },
+      });
+      await load();
+    }
+  }
+
   async #injectCollector(): Promise<{ sessionId: string }> {
     if (!this.#view || !this.#authorization || !this.#client) throw new Error('Target ausente.');
     if (!this.#collectorScript) {
@@ -437,6 +513,10 @@ export class WebCaptureController {
       url: safePageUrl(this.#view.webContents.getURL()),
       applicationId: context.applicationId,
       captureEnvironmentBundle: true,
+      networkCapture: true,
+      captureResources: true,
+      captureResourcesMaxPerSession: 200,
+      captureResourcesSampleRate: 1,
       meta: {
         testCase: this.#authorization.mission,
         mode: 'loop-test',
@@ -467,7 +547,7 @@ export class WebCaptureController {
         cycleNumber: context.cycleNumber,
       },
     };
-    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:0};document.addEventListener('click',()=>{globalThis.__voidrDesktopSignals.clicks+=1},{capture:true,passive:true});Promise.resolve(globalThis.VoidrCollector.init(${JSON.stringify(options)})).then(()=>({sessionId:globalThis.VoidrCollector.getSessionId?.()||null,ready:Boolean(globalThis.VoidrCollector.getSessionId?.())}));`;
+    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:[]};document.addEventListener('click',(event)=>{const element=event.target instanceof Element?event.target.closest('[data-testid],[data-test],button,a,input,select,textarea,[role]'):null;const tag=element?.tagName?.toLowerCase?.()||'element';const testId=element?.getAttribute?.('data-testid')||element?.getAttribute?.('data-test')||'';const id=element?.id||'';const selector=(id?'#'+CSS.escape(id):testId?tag+'[data-testid="'+CSS.escape(testId)+'"]':tag).slice(0,240);const clicks=globalThis.__voidrDesktopSignals?.clicks;if(Array.isArray(clicks)){clicks.push({selector,x:Math.round(event.clientX),y:Math.round(event.clientY)});if(clicks.length>50)clicks.shift()}},{capture:true,passive:true});Promise.resolve(globalThis.VoidrCollector.init(${JSON.stringify(options)})).then(()=>({sessionId:globalThis.VoidrCollector.getSessionId?.()||null,ready:Boolean(globalThis.VoidrCollector.getSessionId?.())}));`;
     const result = (await this.#view.webContents.executeJavaScriptInIsolatedWorld(
       COLLECTOR_WORLD,
       [{ code }],
@@ -502,6 +582,7 @@ export class WebCaptureController {
       if (!frame || typeof frame.parentId === 'string') return;
       const url = String(frame.url ?? '');
       if (!url || this.#isVoidrInfrastructure(url)) return;
+      this.#addSignal('pages', 'Navegação', this.#boundedResourceUrl(url));
       this.#increment('pages');
       await this.#trackInCollector('voidr.desktop.page', {
         url: this.#boundedResourceUrl(url),
@@ -513,7 +594,17 @@ export class WebCaptureController {
       const request = parameters.request as Record<string, unknown> | undefined;
       const requestId = String(parameters.requestId ?? '');
       const url = String(request?.url ?? '');
-      if (this.#isVoidrInfrastructure(url)) return;
+      if (!requestId || !this.#isCapturableResource(url)) return;
+      const redirect = parameters.redirectResponse as Record<string, unknown> | undefined;
+      const previous = this.#requestMeta.get(requestId);
+      if (redirect && previous) {
+        this.#recordNetworkSignal({
+          ...previous,
+          status: Number(redirect.status ?? 0),
+          mimeType: String(redirect.mimeType ?? '').slice(0, 120),
+          durationMs: Date.now() - previous.startedAt,
+        });
+      }
       this.#requestMeta.set(requestId, {
         method: String(request?.method ?? 'GET').slice(0, 16),
         url: this.#boundedResourceUrl(url),
@@ -527,13 +618,24 @@ export class WebCaptureController {
       if (!request) return;
       this.#requestMeta.delete(requestId);
       const response = parameters.response as Record<string, unknown> | undefined;
-      this.#increment('requests');
-      await this.#trackInCollector('voidr.desktop.request', {
-        method: request.method,
-        url: request.url,
+      this.#recordNetworkSignal({
+        ...request,
         status: Number(response?.status ?? 0),
         mimeType: String(response?.mimeType ?? '').slice(0, 120),
         durationMs: Date.now() - request.startedAt,
+      });
+      return;
+    }
+    if (method === 'Network.loadingFailed') {
+      const requestId = String(parameters.requestId ?? '');
+      const request = this.#requestMeta.get(requestId);
+      if (!request) return;
+      this.#requestMeta.delete(requestId);
+      this.#recordNetworkSignal({
+        ...request,
+        status: 0,
+        durationMs: Date.now() - request.startedAt,
+        failure: redactText(String(parameters.errorText ?? 'Falha de rede')).slice(0, 240),
       });
       return;
     }
@@ -541,6 +643,12 @@ export class WebCaptureController {
       const details = parameters.exceptionDetails as Record<string, unknown> | undefined;
       const exception = details?.exception as Record<string, unknown> | undefined;
       const description = String(exception?.description ?? details?.text ?? 'Erro JavaScript');
+      this.#addSignal(
+        'errors',
+        'Erro JavaScript',
+        redactText(description).slice(0, 1_000),
+        'error',
+      );
       this.#increment('errors');
       await this.#trackInCollector('voidr.desktop.error', {
         message: redactText(description).slice(0, 500),
@@ -660,7 +768,13 @@ export class WebCaptureController {
         },
       });
       this.#setState(captureReducer(this.#state, { type: 'PROCESS' }));
-      const completion = await this.#waitForCycleReady();
+      const authorization = this.#authorization;
+      const client = this.#client;
+      const completion = await this.#waitForCycleReady(
+        client,
+        authorization.safeContext.verificationId,
+        authorization.safeContext.harnessDeliveryState,
+      );
       if (completion.deliveryState) {
         this.#setState(
           captureReducer(this.#state, {
@@ -691,9 +805,17 @@ export class WebCaptureController {
           this.#state.generation,
         );
       }
-      this.#authorization = undefined;
-      this.#client = undefined;
-      this.#collectorScript = undefined;
+      if (completion.ready) {
+        this.#releaseAuthorization(this.#state.generation);
+      } else {
+        this.#observeCycleReadiness({
+          client,
+          verificationId: authorization.safeContext.verificationId,
+          generation: this.#state.generation,
+          initialDeliveryState: completion.deliveryState,
+          indexedThrough,
+        });
+      }
       return this.status;
     } catch (error) {
       this.#fail(error, 'WEB_ATTACH_FAILED', 'attach');
@@ -702,17 +824,30 @@ export class WebCaptureController {
   }
 
   async #waitForCycleReady(
+    client: VoidrServiceClient,
+    verificationId: string,
+    initialDeliveryState?: HarnessDeliveryState,
     timeoutMs = 30_000,
   ): Promise<{ ready: boolean; deliveryState?: HarnessDeliveryState }> {
-    if (!this.#authorization || !this.#client || !this.#client.runtime.localAdapter) {
-      return { ready: true, deliveryState: this.#authorization?.safeContext.harnessDeliveryState };
+    if (!client.runtime.localAdapter) {
+      return { ready: true, ...(initialDeliveryState ? { deliveryState: initialDeliveryState } : {}) };
     }
     const deadline = Date.now() + timeoutMs;
-    let deliveryState = this.#authorization.safeContext.harnessDeliveryState;
+    let deliveryState = initialDeliveryState;
+    let consecutiveStatusFailures = 0;
     while (Date.now() < deadline) {
-      const status = await this.#client
-        .getVerificationStatus(this.#authorization.safeContext.verificationId)
-        .catch(() => null);
+      let status: Record<string, unknown> | null = null;
+      try {
+        status = await client.getVerificationStatus(verificationId);
+        consecutiveStatusFailures = 0;
+      } catch {
+        consecutiveStatusFailures += 1;
+        if (consecutiveStatusFailures >= 3) {
+          throw new Error(
+            'A captura foi preservada, mas o Cycle não pôde ser localizado para preparar a revisão.',
+          );
+        }
+      }
       const state = status && typeof status.status === 'string' ? status.status : '';
       const candidateDeliveryState =
         status?.harnessDelivery && typeof status.harnessDelivery === 'object'
@@ -736,6 +871,89 @@ export class WebCaptureController {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     return { ready: false, ...(deliveryState ? { deliveryState } : {}) };
+  }
+
+  #observeCycleReadiness(input: {
+    client: VoidrServiceClient;
+    verificationId: string;
+    generation?: string;
+    initialDeliveryState?: HarnessDeliveryState;
+    indexedThrough: number;
+  }): void {
+    if (!input.generation || this.#readinessObserverGeneration === input.generation) return;
+    this.#readinessObserverGeneration = input.generation;
+    void (async () => {
+      try {
+        const completion = await this.#waitForCycleReady(
+          input.client,
+          input.verificationId,
+          input.initialDeliveryState,
+          90_000,
+        );
+        if (
+          this.#state.generation !== input.generation ||
+          this.#state.stage !== 'processing'
+        ) {
+          return;
+        }
+        if (!completion.ready) {
+          throw new Error(
+            'A captura está preservada, mas a preparação da revisão excedeu o tempo esperado.',
+          );
+        }
+        if (completion.deliveryState) {
+          this.#setState(
+            captureReducer(this.#state, {
+              type: 'HARNESS_DELIVERY',
+              state: completion.deliveryState,
+            }),
+          );
+        }
+        this.#setState(captureReducer(this.#state, { type: 'READY' }));
+        await this.ledger.append({
+          type: 'web.ready',
+          generation: input.generation,
+          sessionId: this.#state.sessionId,
+          stage: 'ready_for_review',
+          data: {
+            indexedThrough: input.indexedThrough,
+            ...(completion.deliveryState
+              ? { harnessDeliveryState: completion.deliveryState }
+              : {}),
+            resumedInBackground: true,
+          },
+        });
+        this.#releaseAuthorization(input.generation);
+        if (
+          completion.deliveryState &&
+          completion.deliveryState !== 'acknowledged'
+        ) {
+          void this.#observeHarnessAcknowledgement(
+            input.client,
+            input.verificationId,
+            input.generation,
+          );
+        }
+      } catch (error) {
+        if (
+          this.#state.generation === input.generation &&
+          this.#state.stage === 'processing'
+        ) {
+          this.#fail(error, 'WEB_PROCESSING_TIMEOUT', 'attach');
+        }
+      } finally {
+        if (this.#readinessObserverGeneration === input.generation) {
+          this.#readinessObserverGeneration = undefined;
+        }
+      }
+    })();
+  }
+
+  #releaseAuthorization(generation?: string): void {
+    if (!generation || this.#state.generation !== generation) return;
+    this.#authorization = undefined;
+    this.#client = undefined;
+    this.#collectorScript = undefined;
   }
 
   async #observeHarnessAcknowledgement(
@@ -772,6 +990,58 @@ export class WebCaptureController {
     }
   }
 
+  async #captureExistingNetworkEntries(): Promise<void> {
+    if (!this.#view || this.#view.webContents.isDestroyed()) return;
+    const entries = (await this.#view.webContents
+      .executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [
+        {
+          code: `(()=>{const normalize=(entry)=>({url:String(entry.name||''),method:'GET',status:Number(entry.responseStatus||0),mimeType:String(entry.initiatorType||entry.entryType||''),durationMs:Math.max(0,Math.round(Number(entry.duration||0)))});const navigation=performance.getEntriesByType('navigation').map(normalize);const resources=performance.getEntriesByType('resource').slice(-200).map(normalize);return [...navigation,...resources].slice(-200)})()`,
+        },
+      ])
+      .catch(() => [])) as unknown;
+    if (!Array.isArray(entries)) return;
+    let captured = 0;
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const value = entry as Record<string, unknown>;
+      const url = String(value.url ?? '');
+      if (!this.#isCapturableResource(url)) continue;
+      this.#recordNetworkSignal({
+        method: String(value.method ?? 'GET'),
+        url: this.#boundedResourceUrl(url),
+        status: Number(value.status ?? 0),
+        mimeType: String(value.mimeType ?? '').slice(0, 120),
+        durationMs: Math.max(0, Math.round(Number(value.durationMs ?? 0))),
+      }, false);
+      captured += 1;
+    }
+    if (captured) this.#increment('requests', captured);
+  }
+
+  #recordNetworkSignal(input: NetworkSignal, increment = true): void {
+    const method = input.method.trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 16) || 'GET';
+    const status = Number.isFinite(input.status) ? Math.max(0, Math.round(input.status)) : 0;
+    const url = this.#boundedResourceUrl(input.url);
+    const durationMs = Number.isFinite(input.durationMs)
+      ? Math.max(0, Math.round(input.durationMs))
+      : 0;
+    const tone = status >= 500 || input.failure
+      ? 'error'
+      : status >= 400
+        ? 'warning'
+        : status >= 200 && status < 400
+          ? 'success'
+          : 'neutral';
+    const outcome = input.failure || (status ? `HTTP ${status}` : 'Resposta não disponível');
+    this.#addSignal(
+      'requests',
+      `${method} · ${outcome}`,
+      `${url} · ${durationMs} ms${input.mimeType ? ` · ${input.mimeType}` : ''}`,
+      tone,
+    );
+    if (increment) this.#increment('requests');
+  }
+
   async #ingestLifecycle(type: 'recording.started' | 'seal.requested', payload: Record<string, unknown>): Promise<void> {
     if (!this.#authorization || !this.#client) return;
     await this.#client.verificationIngest(this.#authorization, 'lifecycle-events', {
@@ -791,11 +1061,23 @@ export class WebCaptureController {
       void this.#view.webContents
         .executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [
           {
-            code: `(()=>{const value=globalThis.__voidrDesktopSignals?.clicks||0;if(globalThis.__voidrDesktopSignals)globalThis.__voidrDesktopSignals.clicks=0;return value})()`,
+            code: `(()=>{const value=Array.isArray(globalThis.__voidrDesktopSignals?.clicks)?globalThis.__voidrDesktopSignals.clicks.splice(0,50):[];return value})()`,
           },
         ])
         .then((clicks) => {
-          if (Number.isInteger(clicks) && clicks > 0) this.#increment('clicks', clicks);
+          if (!Array.isArray(clicks) || clicks.length === 0) return;
+          const bounded = clicks.slice(0, 50).flatMap((entry) => {
+            if (!entry || typeof entry !== 'object') return [];
+            const value = entry as Record<string, unknown>;
+            const selector = redactText(String(value.selector ?? 'element')).slice(0, 240);
+            const x = Math.round(Number(value.x ?? 0));
+            const y = Math.round(Number(value.y ?? 0));
+            this.#addSignal('clicks', `Clique em ${selector}`, `x ${x} · y ${y}`);
+            return [{ selector, x, y }];
+          });
+          if (!bounded.length) return;
+          this.#increment('clicks', bounded.length);
+          void this.#trackInCollector('voidr.desktop.click', { clicks: bounded });
         })
         .catch(() => undefined);
     }, 700);
@@ -822,6 +1104,25 @@ export class WebCaptureController {
     this.#setState(captureReducer(this.#state, { type: 'EVIDENCE', category, increment }));
   }
 
+  #addSignal(
+    category: CapturedSignal['category'],
+    title: string,
+    detail?: string,
+    tone: CapturedSignal['tone'] = 'neutral',
+  ): void {
+    this.#recentSignals = [
+      {
+        id: randomUUID(),
+        category,
+        atMs: Math.max(0, Date.now() - this.#startedAt),
+        title: redactText(title).slice(0, 240),
+        ...(detail ? { detail: redactText(detail).slice(0, 1_000) } : {}),
+        tone,
+      },
+      ...this.#recentSignals,
+    ].slice(0, 60);
+  }
+
   #isVoidrInfrastructure(input: string): boolean {
     if (!this.#client) return false;
     return [
@@ -829,6 +1130,15 @@ export class WebCaptureController {
       this.#client.runtime.serviceUrl,
       this.#client.runtime.collectorScriptUrl,
     ].some((base) => input.startsWith(base));
+  }
+
+  #isCapturableResource(input: string): boolean {
+    try {
+      const url = new URL(input);
+      return ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) && !this.#isVoidrInfrastructure(input);
+    } catch {
+      return false;
+    }
   }
 
   #boundedResourceUrl(input: string): string {

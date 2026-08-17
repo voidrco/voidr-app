@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,10 +10,17 @@ const desktopDirectory = resolve(directory, '..');
 const require = createRequire(import.meta.url);
 const electronBinary = require('electron');
 const debuggingPort = Number(process.env.VOIDR_CAPTURE_SMOKE_PORT ?? 9333);
+const fixtureName = process.env.VOIDR_CAPTURE_SMOKE_FIXTURE ?? 'checkout-retry';
+if (!['checkout-retry', 'itau-agro'].includes(fixtureName)) {
+  throw new Error(`Fixture de smoke desconhecida: ${fixtureName}`);
+}
 const serviceUrl = process.env.VOIDR_SERVICE_URL ?? 'http://127.0.0.1:3000/v1';
 const localKey = process.env.VERIFICATION_LOCAL_DEV_KEY ?? 'voidr-verification-local';
 const organizationId =
   process.env.VERIFICATION_LOCAL_ORGANIZATION_ID ?? 'org_verification_local';
+const clickhouseUrl = process.env.CLICKHOUSE_URL ?? 'http://127.0.0.1:8123';
+const clickhouseUser = process.env.CLICKHOUSE_USER ?? 'voidr';
+const clickhousePassword = process.env.CLICKHOUSE_PASSWORD ?? 'voidr_local';
 const headers = {
   'Content-Type': 'application/json',
   'x-voidr-dev-key': localKey,
@@ -29,6 +38,26 @@ async function requestJson(url, init = {}) {
     throw new Error(body.message ?? `Local API respondeu HTTP ${response.status}`);
   }
   return body.data ?? body;
+}
+
+async function storedNetworkCount(sessionId) {
+  const url = new URL(clickhouseUrl);
+  url.searchParams.set('database', 'voidr_sessions');
+  url.searchParams.set(
+    'query',
+    "SELECT count() AS total FROM sessionEvents WHERE organizationId={org:String} AND sessionId={sid:String} AND type='network' FORMAT JSONEachRow",
+  );
+  url.searchParams.set('param_org', organizationId);
+  url.searchParams.set('param_sid', sessionId);
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${clickhouseUser}:${clickhousePassword}`).toString('base64')}`,
+    },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error(`ClickHouse respondeu HTTP ${response.status}.`);
+  const row = await response.json();
+  return Number(row.total ?? 0);
 }
 
 async function waitFor(description, operation, timeoutMs = 30_000) {
@@ -113,7 +142,13 @@ class DevToolsClient {
 }
 
 async function main() {
-  const fixture = await requestJson(`${serviceUrl}/loop-test-dev/scenarios/fixtures/checkout-retry`, {
+  // Keep the automated Electron instance isolated from the installed app.
+  // Chromium's single-instance lock is scoped by userData, so sharing it
+  // makes a smoke run steal (or lose) the real user's voidr:// handoff.
+  const smokeUserDataDirectory = await mkdtemp(
+    resolve(tmpdir(), 'voidr-capture-web-smoke-'),
+  );
+  const fixture = await requestJson(`${serviceUrl}/loop-test-dev/scenarios/fixtures/${fixtureName}`, {
     method: 'POST',
     headers,
   });
@@ -121,7 +156,7 @@ async function main() {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      name: 'Voidr Capture desktop smoke',
+      name: `Voidr Capture desktop smoke · ${fixtureName}`,
       applicationId: fixture.applicationId,
       environmentSlug: fixture.environmentSlug,
       targetUrl: fixture.targetUrl,
@@ -133,7 +168,12 @@ async function main() {
 
   const child = spawn(
     electronBinary,
-    [`--remote-debugging-port=${debuggingPort}`, desktopDirectory, launchUrl],
+    [
+      `--remote-debugging-port=${debuggingPort}`,
+      `--user-data-dir=${smokeUserDataDirectory}`,
+      desktopDirectory,
+      launchUrl,
+    ],
     {
       cwd: desktopDirectory,
       env: {
@@ -145,6 +185,7 @@ async function main() {
     },
   );
   let control;
+  let target;
   try {
     const controlTarget = await waitFor('Control renderer', async () => {
       const targets = await listTargets();
@@ -155,7 +196,7 @@ async function main() {
       const deadline=Date.now()+20000;
       while(Date.now()<deadline){
         const status=await window.voidrCapture.capture.status();
-        if(status?.stage==='ready') return window.voidrCapture.capture.startWeb();
+        if(status?.stage==='recording') return status;
         if(status?.stage==='recoverable_error'||status?.stage==='terminal_error') throw new Error(status.message||status.errorCode||'Handoff falhou.');
         await new Promise((resolve)=>setTimeout(resolve,200));
       }
@@ -163,15 +204,196 @@ async function main() {
     })()`);
     if (startResult?.stage !== 'recording') throw new Error('O host não entrou em recording.');
 
-    await delay(1_200);
-    await control.evaluate(
-      `window.voidrCapture.capture.annotate({kind:'screen',note:'Smoke desktop: estado após a interação principal'})`,
-      30_000,
+    const targetEntry = await waitFor('Aplicação capturada', async () => {
+      const targets = await listTargets();
+      const expectedOrigin = new URL(fixture.targetUrl).origin;
+      return targets.find(
+        (entry) =>
+          entry.type === 'page' &&
+          entry.id !== controlTarget.id &&
+          typeof entry.url === 'string' &&
+          entry.url.startsWith(expectedOrigin),
+      );
+    });
+    if (!targetEntry.webSocketDebuggerUrl) throw new Error('Target Web sem DevTools endpoint.');
+    target = new DevToolsClient(targetEntry.webSocketDebuggerUrl);
+    const defaultBounds = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('default')`,
     );
-    const finalStatus = await control.evaluate('window.voidrCapture.capture.stopWeb()', 75_000);
+    const defaultTargetHeight = defaultBounds?.height;
+    if (!Number.isFinite(defaultTargetHeight)) throw new Error('O host não informou os bounds do target.');
+
+    const requestStatus = await waitFor('Captura de requests', async () => {
+      const value = await control.evaluate('window.voidrCapture.capture.status()');
+      return value?.evidence?.requests > 0 ? value : undefined;
+    });
+    if (!requestStatus.recentSignals?.some((signal) => signal.category === 'requests')) {
+      throw new Error('A contagem de requests não trouxe contexto inspecionável.');
+    }
+
+    await waitFor('Dock da captura automática', async () => {
+      const ready = await control.evaluate(`Boolean(
+        [...document.querySelectorAll('.dock-actions button')]
+          .find((item)=>item.textContent?.trim()==='Evidência')
+      )`);
+      return ready || undefined;
+    });
+    await control.evaluate(`(()=>{
+      const button=[...document.querySelectorAll('.dock-actions button')].find((item)=>item.textContent?.trim()==='Evidência');
+      if(!button) throw new Error('Ação Evidência não encontrada.');
+      button.click();
+      return true;
+    })()`);
+    const noteBounds = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('annotation')`,
+    );
+    const noteTargetHeight = await waitFor('Área nativa reservada para nota', async () => {
+      const rendererReady = await control.evaluate(
+        `document.querySelector('.capture-shell')?.classList.contains('capture-shell-note')`,
+      );
+      const panelTop = await control.evaluate(
+        `document.querySelector('.dock-note')?.getBoundingClientRect().top`,
+      );
+      const targetBottom = Number(noteBounds?.y ?? 0) + Number(noteBounds?.height ?? 0);
+      return rendererReady && noteBounds?.height <= defaultTargetHeight - 60 && panelTop >= targetBottom
+        ? noteBounds.height
+        : undefined;
+    });
+
+    await control.evaluate(`(()=>{
+      const screen=[...document.querySelectorAll('.annotation-action')]
+        .find((item)=>item.textContent?.includes('Capturar tela'));
+      const input=document.querySelector('.dock-note input');
+      if(!screen||!input) throw new Error('Ações de evidência incompletas.');
+      if(input.value) throw new Error('O smoke exige captura sem nota obrigatória.');
+      screen.click();
+      return true;
+    })()`);
+    await waitFor('Persistência da nota', async () => {
+      const value = await control.evaluate('window.voidrCapture.capture.status()');
+      return value?.evidence?.notes > 0 ? value : undefined;
+    }, 30_000);
+
+    const restoredAfterNoteBounds = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('default')`,
+    );
+    const restoredAfterNote = restoredAfterNoteBounds?.height;
+    if (restoredAfterNote !== defaultTargetHeight) {
+      throw new Error('O target não restaurou os bounds depois da nota.');
+    }
+    await control.evaluate(`(()=>{
+      const button=[...document.querySelectorAll('.dock-actions button')]
+        .find((item)=>item.textContent?.trim()==='Evidência');
+      if(!button) throw new Error('Ação Evidência não encontrada para selecionar elemento.');
+      button.click();
+      return true;
+    })()`);
+    await waitFor('Ação de selecionar elemento', async () => {
+      const ready = await control.evaluate(`Boolean(
+        [...document.querySelectorAll('.annotation-action')]
+          .find((item)=>item.textContent?.includes('Selecionar elemento'))
+      )`);
+      return ready || undefined;
+    });
+    await control.evaluate(`(()=>{
+      const button=[...document.querySelectorAll('.annotation-action')]
+        .find((item)=>item.textContent?.includes('Selecionar elemento'));
+      if(!button) throw new Error('Selecionar elemento não está disponível.');
+      button.click();
+      return true;
+    })()`);
+    await waitFor('Modo de seleção de elemento', async () => {
+      const active = await control.evaluate(
+        `document.querySelector('.annotation-notice')?.textContent?.includes('Selecione um elemento')`,
+      );
+      return active || undefined;
+    });
+    const point = await target.evaluate(`(()=>{
+      const element=document.querySelector('button,input,[role="button"]')||document.body;
+      const rect=element.getBoundingClientRect();
+      return {x:rect.left+Math.max(1,Math.min(rect.width/2,24)),y:rect.top+Math.max(1,Math.min(rect.height/2,18))};
+    })()`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await target.call('Input.dispatchMouseEvent', {
+        type,
+        x: point.x,
+        y: point.y,
+        ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 }),
+      });
+    }
+    await waitFor('Persistência do elemento sem nota', async () => {
+      const value = await control.evaluate('window.voidrCapture.capture.status()');
+      return value?.evidence?.notes > 1 ? value : undefined;
+    }, 30_000);
+    await control.evaluate(`(()=>{
+      const button=document.querySelector('button[title="Ver requisições"]');
+      if(!button) throw new Error('Detalhes de requisições não encontrados.');
+      button.click();
+      return true;
+    })()`);
+    const evidenceBounds = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('evidence')`,
+    );
+    const evidenceTargetHeight = await waitFor('Área nativa reservada para evidências', async () => {
+      const rendererReady = await control.evaluate(
+        `document.querySelector('.capture-shell')?.classList.contains('capture-shell-evidence')`,
+      );
+      const detailVisible = await control.evaluate(
+        `Boolean(document.querySelector('.dock-evidence-list article'))`,
+      );
+      const panelTop = await control.evaluate(
+        `document.querySelector('.dock-evidence')?.getBoundingClientRect().top`,
+      );
+      const targetBottom = Number(evidenceBounds?.y ?? 0) + Number(evidenceBounds?.height ?? 0);
+      if (
+        !rendererReady ||
+        !detailVisible ||
+        evidenceBounds?.height > defaultTargetHeight - 140 ||
+        panelTop < targetBottom
+      ) {
+        throw new Error(
+          JSON.stringify({ rendererReady, detailVisible, panelTop, defaultTargetHeight, evidenceBounds }),
+        );
+      }
+      return evidenceBounds.height;
+    });
+    await control.evaluate(`(()=>{
+      const button=[...document.querySelectorAll('.dock-evidence button')].find((item)=>item.textContent?.trim()==='Fechar');
+      if(!button) throw new Error('Ação Fechar não encontrada.');
+      button.click();
+      return true;
+    })()`);
+    const restoredAfterEvidence = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('default')`,
+    );
+    if (restoredAfterEvidence?.height !== defaultTargetHeight) {
+      throw new Error('O target não restaurou os bounds depois das evidências.');
+    }
+
+    await control.evaluate(`(()=>{
+      globalThis.__voidrSmokeStop = window.voidrCapture.capture.stopWeb();
+      return true;
+    })()`);
+    const finalizationFeedback = await waitFor('Feedback de finalização', async () => {
+      const value = await control.evaluate(`(()=>{
+        const steps=[...document.querySelectorAll('.finalization-step')];
+        if(steps.length!==4) return null;
+        return steps.map((step)=>({
+          title:step.querySelector('strong')?.textContent?.trim(),
+          active:step.classList.contains('active'),
+          done:step.classList.contains('done'),
+        }));
+      })()`);
+      return value?.some((step) => step.active) ? value : undefined;
+    });
+    const finalStatus = await control.evaluate('globalThis.__voidrSmokeStop', 75_000);
     if (!['processing', 'ready_for_review'].includes(finalStatus?.stage)) {
       throw new Error(`Finalização terminou em ${finalStatus?.stage ?? 'estado desconhecido'}.`);
     }
+    const persistedNetworkRequests = await waitFor('Requests canônicos no ClickHouse', async () => {
+      const count = await storedNetworkCount(finalStatus.sessionId);
+      return count > 0 ? count : undefined;
+    });
     process.stdout.write(
       `${JSON.stringify(
         {
@@ -182,6 +404,14 @@ async function main() {
           sessionId: finalStatus.sessionId,
           stage: finalStatus.stage,
           evidence: finalStatus.evidence,
+          persistedNetworkRequests,
+          finalizationFeedback,
+          nativeTargetLayout: {
+            defaultHeight: defaultTargetHeight,
+            noteHeight: noteTargetHeight,
+            evidenceHeight: evidenceTargetHeight,
+            restoredHeight: restoredAfterNote,
+          },
         },
         null,
         2,
@@ -189,12 +419,14 @@ async function main() {
     );
   } finally {
     control?.close();
+    target?.close();
     child.kill('SIGTERM');
     await Promise.race([
       new Promise((resolvePromise) => child.once('exit', resolvePromise)),
       delay(2_000),
     ]);
     if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(smokeUserDataDirectory, { recursive: true, force: true });
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Braces,
@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Globe2,
   Link2,
+  ListChecks,
   Loader2,
   MessageSquare,
   Mic,
@@ -15,6 +16,7 @@ import {
   MousePointer2,
   Network,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Settings2,
@@ -22,11 +24,14 @@ import {
   Square,
   Terminal,
   Wrench,
+  X,
 } from 'lucide-react';
 import {
   redactText,
   type AndroidDevice,
   type CaptureStatus,
+  type CapturedSignal,
+  type CapturedSignalCategory,
   type DesktopCaptureLaunch,
   type DesktopCaptureResolution,
   type LocalRuntimeConfig,
@@ -34,6 +39,8 @@ import {
 import { Badge, Button, Panel, StatusDot, Tabs, Toast, VoidrBrand, VoidrMark } from '@voidr/capture-design-system';
 import { finalizationStages, stageCopy } from '@voidr/capture-presentation';
 import { startAudioCapture, stopAudioCapture, type ActiveAudioCapture } from './audio';
+import { cycleParticipantLabel } from './cycle-identity';
+import { WorkspaceHome } from './WorkspaceHome';
 
 const defaultRuntime: LocalRuntimeConfig = {
   serviceUrl: 'http://127.0.0.1:3000/v1',
@@ -54,6 +61,7 @@ const idleStatus: CaptureStatus = {
 type DoctorResult = Awaited<ReturnType<typeof window.voidrCapture.doctor>>;
 type MobileVerification = Record<string, unknown>;
 type Notice = { tone: 'success' | 'warning' | 'error' | 'info'; title: string; message?: string };
+type AnnotationNotice = Notice & { kind: 'element' | 'screen'; active: boolean };
 
 function elapsed(value: number): string {
   const seconds = Math.floor(value / 1_000);
@@ -70,6 +78,7 @@ function safeError(error: unknown): string {
 
 function App() {
   const [status, setStatus] = useState<CaptureStatus>(idleStatus);
+  const [homeView, setHomeView] = useState<'loops' | 'capture'>('loops');
   const [mode, setMode] = useState<'web' | 'mobile' | 'api'>('web');
   const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() => {
     try {
@@ -84,8 +93,9 @@ function App() {
   const [doctor, setDoctor] = useState<DoctorResult>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState<CapturedSignalCategory>();
   const [note, setNote] = useState('');
-  const [annotationKind, setAnnotationKind] = useState<'element' | 'screen'>('element');
+  const [annotationNotice, setAnnotationNotice] = useState<AnnotationNotice>();
   const [audio, setAudio] = useState<ActiveAudioCapture>();
   const [audioStartedAt, setAudioStartedAt] = useState(0);
   const [transcript, setTranscript] = useState('');
@@ -99,14 +109,27 @@ function App() {
   const [mobileContext, setMobileContext] = useState<{ loopId: string; cycleId: string }>();
   const [mobileAppOpened, setMobileAppOpened] = useState(false);
   const [launchResolution, setLaunchResolution] = useState<DesktopCaptureResolution>();
+  const [finalizationElapsedMs, setFinalizationElapsedMs] = useState(0);
   const acceptingLaunch = useRef<string | undefined>(undefined);
+  const finalizationStartedAt = useRef<number | undefined>(undefined);
+  const annotationNoticeTimer = useRef<number | undefined>(undefined);
 
   const copy = stageCopy[status.stage];
   const activeCapture = ['ready', 'recording', 'stopping', 'sealed', 'attaching', 'processing', 'ready_for_review', 'recoverable_error'].includes(status.stage) && status.platform === 'web';
   const recording = status.stage === 'recording';
   const finalizing = ['stopping', 'sealed', 'attaching', 'processing'].includes(status.stage);
+  const cycleParticipant = status.context?.participant ?? launchResolution?.participant;
+  const cycleStartedAt = status.context?.cycleStartedAt ?? launchResolution?.cycleStartedAt;
+  const participantLabel = cycleParticipantLabel(cycleParticipant, cycleStartedAt);
   const agentName = status.context?.harnessName;
   const harnessDeliveryState = status.context?.harnessDeliveryState;
+  const controlPanelMode = noteOpen && recording
+    ? 'annotation'
+    : evidenceOpen && recording
+      ? 'evidence'
+      : finalizing
+        ? 'finalizing'
+        : 'default';
   const dockDetail = feedback?.message
     ?? (status.stage === 'ready_for_review' && agentName && harnessDeliveryState === 'acknowledged'
       ? `${agentName} recebeu o contexto citado e retomou o trabalho.`
@@ -116,69 +139,80 @@ function App() {
           ? `A captura está pronta. Aguardando o ${agentName} confirmar o contexto.`
       : status.message ?? copy.detail);
 
+  const acceptLaunch = useCallback(async (launch: DesktopCaptureLaunch) => {
+    const key = `${launch.loopId}:${launch.cycleId}`;
+    if (acceptingLaunch.current === key) return;
+    const launchRuntime = runtime.localAdapter && runtime.organizationId !== launch.organizationId
+      ? { ...runtime, organizationId: launch.organizationId }
+      : runtime;
+    acceptingLaunch.current = key;
+    setBusy(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Preparando seu ciclo',
+      message: 'Confirmando aplicação, ambiente e permissões com a Voidr.',
+    });
+    try {
+      const accepted = await window.voidrCapture.capture.acceptLaunch(launch, launchRuntime);
+      if (launchRuntime !== runtime) setRuntime(launchRuntime);
+      setLaunchResolution(accepted.resolution);
+      if (accepted.status) setStatus(accepted.status);
+      setMode(accepted.resolution.surface);
+      if (accepted.resolution.surface === 'mobile') {
+        setVerificationId(accepted.resolution.cycleId);
+        setMobileContext({
+          loopId: accepted.resolution.loopId,
+          cycleId: accepted.resolution.cycleId,
+        });
+        setMobileLoops([
+          {
+            verificationId: accepted.resolution.cycleId,
+            mission: accepted.resolution.mission,
+            applicationType: 'MOBILE',
+          },
+        ]);
+      }
+      setFeedback({
+        tone: 'success',
+        title: accepted.status?.stage === 'recording' ? 'Ciclo em andamento' : 'Ciclo preparado',
+        message:
+          accepted.resolution.surface === 'web'
+            ? accepted.status?.stage === 'recording'
+              ? 'A captura começou automaticamente e o tempo já está contando.'
+              : 'A aplicação está pronta para capturar.'
+            : accepted.resolution.surface === 'mobile'
+              ? 'Conecte o device e execute a jornada no app.'
+              : 'Revise o endpoint antes de iniciar o proxy local.',
+      });
+    } catch (error) {
+      setFeedback({
+        tone: 'error',
+        title: 'Não foi possível abrir o ciclo',
+        message: safeError(error),
+      });
+    } finally {
+      acceptingLaunch.current = undefined;
+      setBusy(false);
+    }
+  }, [runtime]);
+
   useEffect(() => {
     const unsubscribe = window.voidrCapture.capture.onStatus(setStatus);
     void window.voidrCapture.capture.status().then((value) => value && setStatus(value));
     return unsubscribe;
   }, []);
 
+  useEffect(() => () => {
+    if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
+  }, []);
+
   useEffect(() => {
-    const accept = async (launch: DesktopCaptureLaunch) => {
-      const key = `${launch.loopId}:${launch.cycleId}`;
-      if (acceptingLaunch.current === key) return;
-      acceptingLaunch.current = key;
-      setBusy(true);
-      setFeedback({
-        tone: 'info',
-        title: 'Recebendo a missão',
-        message: 'Confirmando aplicação, ambiente e permissões com a Voidr.',
-      });
-      try {
-        const accepted = await window.voidrCapture.capture.acceptLaunch(launch, runtime);
-        setLaunchResolution(accepted.resolution);
-        if (accepted.status) setStatus(accepted.status);
-        setMode(accepted.resolution.surface);
-        if (accepted.resolution.surface === 'mobile') {
-          setVerificationId(accepted.resolution.cycleId);
-          setMobileContext({
-            loopId: accepted.resolution.loopId,
-            cycleId: accepted.resolution.cycleId,
-          });
-          setMobileLoops([
-            {
-              verificationId: accepted.resolution.cycleId,
-              mission: accepted.resolution.mission,
-              applicationType: 'MOBILE',
-            },
-          ]);
-        }
-        setFeedback({
-          tone: 'success',
-          title: 'Missão preparada',
-          message:
-            accepted.resolution.surface === 'web'
-              ? 'Revise a aplicação e clique em Iniciar captura.'
-              : accepted.resolution.surface === 'mobile'
-                ? 'Conecte o device e execute a jornada no app.'
-                : 'Revise o endpoint antes de iniciar o proxy local.',
-        });
-      } catch (error) {
-        setFeedback({
-          tone: 'error',
-          title: 'Não foi possível abrir a missão',
-          message: safeError(error),
-        });
-      } finally {
-        acceptingLaunch.current = undefined;
-        setBusy(false);
-      }
-    };
-    const unsubscribe = window.voidrCapture.capture.onLaunch((launch) => void accept(launch));
+    const unsubscribe = window.voidrCapture.capture.onLaunch((launch) => void acceptLaunch(launch));
     void window.voidrCapture.capture.pendingLaunch().then((launch) => {
-      if (launch) void accept(launch);
+      if (launch) void acceptLaunch(launch);
     });
     return unsubscribe;
-  }, [runtime]);
+  }, [acceptLaunch]);
 
   useEffect(() => {
     const { localDevKey: _ephemeralSecret, ...persistableRuntime } = runtime;
@@ -190,6 +224,31 @@ function App() {
     const timer = window.setInterval(() => setStatus((current) => ({ ...current, elapsedMs: current.elapsedMs + 500 })), 500);
     return () => window.clearInterval(timer);
   }, [recording]);
+
+  useEffect(() => {
+    void window.voidrCapture.capture.setControlPanel(controlPanelMode).catch(() => undefined);
+  }, [controlPanelMode]);
+
+  useEffect(() => {
+    if (recording) return;
+    setNoteOpen(false);
+    setEvidenceOpen(undefined);
+  }, [recording]);
+
+  useEffect(() => {
+    if (!finalizing) {
+      finalizationStartedAt.current = undefined;
+      setFinalizationElapsedMs(0);
+      return;
+    }
+    finalizationStartedAt.current ??= Date.now();
+    const update = () => {
+      setFinalizationElapsedMs(Date.now() - (finalizationStartedAt.current ?? Date.now()));
+    };
+    update();
+    const timer = window.setInterval(update, 1_000);
+    return () => window.clearInterval(timer);
+  }, [finalizing]);
 
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -203,6 +262,23 @@ function App() {
     }
   };
 
+  const startWorkspaceLoop = async (loopId: string) => {
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      const launch = await window.voidrCapture.workspace.startCycle(runtime, loopId);
+      await acceptLaunch(launch);
+    } catch (error) {
+      setFeedback({
+        tone: 'error',
+        title: 'Não foi possível iniciar o ciclo',
+        message: safeError(error),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const prepareAndStart = () =>
     run(async () => {
       if (!recordingUrl.trim()) throw new Error('Cole o link da verificação.');
@@ -210,19 +286,52 @@ function App() {
       await window.voidrCapture.capture.startWeb();
     });
 
-  const annotate = () =>
-    run(async () => {
-      if (!note.trim()) throw new Error('Escreva a observação que deve acompanhar a evidência.');
-      setFeedback({
-        tone: 'info',
-        title: annotationKind === 'element' ? 'Selecione o elemento' : 'Capturando a tela',
-        message: annotationKind === 'element' ? 'Clique no ponto que precisa de atenção.' : 'A imagem será vinculada ao instante atual.',
-      });
-      await window.voidrCapture.capture.annotate({ kind: annotationKind, note: note.trim() });
-      setNote('');
-      setNoteOpen(false);
-      setFeedback({ tone: 'success', title: 'Evidência salva', message: 'Nota e imagem foram vinculadas ao momento da captura.' });
+  const annotate = async (kind: 'element' | 'screen') => {
+    if (busy) return;
+    if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
+    const suppliedNote = note.trim();
+    const fallbackNote = kind === 'element'
+      ? 'Elemento destacado durante o teste.'
+      : 'Estado da tela capturado durante o teste.';
+    setBusy(true);
+    setNoteOpen(false);
+    setEvidenceOpen(undefined);
+    setAnnotationNotice({
+      tone: 'info',
+      kind,
+      active: true,
+      title: kind === 'element' ? 'Selecione um elemento' : 'Capturando a tela',
+      message: kind === 'element'
+        ? 'Passe o cursor pela aplicação e clique no ponto que precisa de atenção.'
+        : 'Salvando uma imagem do estado atual.',
     });
+    try {
+      await window.voidrCapture.capture.setControlPanel('default');
+      await window.voidrCapture.capture.annotate({ kind, note: suppliedNote || fallbackNote });
+      setNote('');
+      setAnnotationNotice({
+        tone: 'success',
+        kind,
+        active: false,
+        title: kind === 'element' ? 'Elemento salvo' : 'Tela salva',
+        message: suppliedNote
+          ? 'Imagem e contexto foram adicionados ao ciclo.'
+          : 'A evidência foi adicionada ao ciclo. Nenhuma nota era obrigatória.',
+      });
+      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 3_500);
+    } catch (error) {
+      setAnnotationNotice({
+        tone: 'error',
+        kind,
+        active: false,
+        title: 'Não foi possível salvar a evidência',
+        message: safeError(error),
+      });
+      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 6_000);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggleVoice = () =>
     run(async () => {
@@ -292,7 +401,7 @@ function App() {
     () => [
       { key: 'pages', label: 'Páginas', icon: Globe2 },
       { key: 'clicks', label: 'Cliques', icon: MousePointer2 },
-      { key: 'requests', label: 'Requests', icon: Network },
+      { key: 'requests', label: 'Requisições', icon: Network },
       { key: 'errors', label: 'Erros', icon: Terminal },
       { key: 'notes', label: 'Notas', icon: MessageSquare },
       { key: 'voiceNotes', label: 'Voz', icon: Mic },
@@ -301,7 +410,7 @@ function App() {
   );
 
   return (
-    <div className={`capture-shell${activeCapture ? ' capture-shell-active' : ''}${finalizing ? ' capture-shell-finalizing' : ''}`}>
+    <div className={`capture-shell${activeCapture ? ' capture-shell-active' : ''}${finalizing ? ' capture-shell-finalizing' : ''}${noteOpen && recording ? ' capture-shell-note' : ''}${evidenceOpen && recording ? ' capture-shell-evidence' : ''}`}>
       <header className="capture-topbar">
         <VoidrBrand />
         <div className="capture-topbar-context">
@@ -311,18 +420,69 @@ function App() {
               <code>{status.context.cycleNumber ? `Cycle #${status.context.cycleNumber}` : status.context.cycleId.slice(0, 8)}</code>
             </>
           ) : (
-            <span className="capture-context-name">Captura local</span>
+            <span className="capture-context-name">
+              {homeView === 'loops' ? 'Workspace local' : 'Captura local'}
+            </span>
           )}
         </div>
         <div className="capture-topbar-status" role="status">
           <StatusDot live={recording} />
-          <span>{copy.title}</span>
+          <span>{!activeCapture && homeView === 'loops' ? 'Conectado' : copy.title}</span>
           {recording && <code>{elapsed(status.elapsedMs)}</code>}
         </div>
       </header>
 
       {!activeCapture && (
-        <main className="capture-home">
+        <div className="capture-idle-layout">
+          <aside className="capture-sidebar" aria-label="Navegação principal">
+            <nav>
+              <button
+                type="button"
+                className={homeView === 'loops' ? 'active' : ''}
+                onClick={() => setHomeView('loops')}
+              >
+                <ListChecks size={15} />
+                <span>Loops</span>
+              </button>
+              <button
+                type="button"
+                className={homeView === 'capture' ? 'active' : ''}
+                onClick={() => setHomeView('capture')}
+              >
+                <Plus size={15} />
+                <span>Nova captura</span>
+              </button>
+            </nav>
+            <div className="capture-sidebar-footer">
+              <div className="capture-first-steps">
+                <div>
+                  <span>Primeiros passos</span>
+                  <Badge tone="neutral">1 de 3</Badge>
+                </div>
+                <strong>Desktop conectado</strong>
+                <p>Selecione um Loop e inicie seu ciclo. A Voidr organiza as evidências automaticamente.</p>
+                <span className="capture-setup-progress"><i /></span>
+              </div>
+              <button type="button" onClick={() => { setHomeView('capture'); setSettingsOpen(true); }}>
+                <Settings2 size={14} />
+                <span>Configurações</span>
+              </button>
+            </div>
+          </aside>
+
+          {homeView === 'loops' ? (
+            <WorkspaceHome
+              runtime={runtime}
+              busy={busy}
+              onStartLoop={startWorkspaceLoop}
+              onOpenCycle={(loopId, cycleId) => void window.voidrCapture.openCycle({
+                platformUrl: runtime.platformUrl,
+                loopId,
+                cycleId,
+              })}
+            />
+          ) : (
+          <main className="capture-home">
           <section className="capture-intro">
             <div>
               <span className="capture-eyebrow">Voidr Capture</span>
@@ -425,23 +585,75 @@ function App() {
           </section>
           {doctor && <DoctorPanel result={doctor} />}
           {settingsOpen && <RuntimeSettings runtime={runtime} onChange={setRuntime} />}
-        </main>
+          </main>
+          )}
+        </div>
       )}
 
       {activeCapture && (
         <footer className="capture-dock">
           <div className="dock-state">
             {finalizing ? <VoidrMark size={30} active /> : <StatusDot live={recording} />}
-            <div><strong>{copy.title}</strong><span>{dockDetail}</span></div>
+            {recording && annotationNotice ? (
+              <div className={`annotation-notice tone-${annotationNotice.tone}`} aria-live="polite">
+                <strong>
+                  {annotationNotice.active && <Loader2 className="spin" size={12} />}
+                  {!annotationNotice.active && annotationNotice.tone === 'success' && <Check size={12} />}
+                  {annotationNotice.title}
+                </strong>
+                {annotationNotice.message && <span>{annotationNotice.message}</span>}
+              </div>
+            ) : recording && cycleParticipant && participantLabel ? (
+              <>
+                <span className="capture-participant-avatar" aria-hidden="true">
+                  {cycleParticipant.name.trim().charAt(0).toLocaleUpperCase()}
+                  {cycleParticipant.picture && (
+                    <img
+                      src={cycleParticipant.picture}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  )}
+                </span>
+                <div aria-label={`Ciclo de ${participantLabel}`}>
+                  <strong title={participantLabel}>{participantLabel}</strong>
+                  <span>
+                    {status.context?.cycleNumber ? `Cycle #${status.context.cycleNumber} · ` : ''}
+                    {status.context?.scenarioName}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div><strong>{copy.title}</strong><span>{dockDetail}</span></div>
+            )}
           </div>
           {recording && (
             <div className="dock-signals" aria-label="Evidências capturadas">
-              {evidenceItems.map(({ key, label, icon: Icon }) => <span key={key} title={label}><Icon size={12} /><b>{status.evidence[key]}</b></span>)}
+              {evidenceItems.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={`Ver ${label.toLowerCase()}`}
+                  className={evidenceOpen === key ? 'active' : ''}
+                  aria-expanded={evidenceOpen === key}
+                  onClick={() => {
+                    const next = evidenceOpen === key ? undefined : key;
+                    setNoteOpen(false);
+                    setEvidenceOpen(next);
+                    void window.voidrCapture.capture.setControlPanel(next ? 'evidence' : 'default');
+                  }}
+                >
+                  <Icon size={12} /><b>{status.evidence[key]}</b>
+                </button>
+              ))}
             </div>
           )}
           <div className="dock-actions">
             {status.stage === 'ready' && <Button size="sm" variant="primary" icon={<Play size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.startWeb(); })}>Iniciar captura</Button>}
-            {recording && <Button size="sm" variant={noteOpen ? 'primary' : 'secondary'} icon={<MessageSquare size={13} />} onClick={() => setNoteOpen((value) => !value)}>Nota</Button>}
+            {recording && <Button size="sm" variant={noteOpen ? 'primary' : 'secondary'} icon={<Camera size={13} />} disabled={busy} onClick={() => { const next = !noteOpen; setEvidenceOpen(undefined); setNoteOpen(next); void window.voidrCapture.capture.setControlPanel(next ? 'annotation' : 'default'); }}>Evidência</Button>}
             {recording && <Button size="sm" variant={audio ? 'danger' : 'secondary'} icon={audio ? <Square size={12} /> : <Mic size={13} />} disabled={busy} onClick={toggleVoice}>{audio ? 'Enviar voz' : 'Voz'}</Button>}
             {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Finalizar</Button>}
             {status.stage === 'recoverable_error' && <Button size="sm" variant="primary" icon={<RefreshCw size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Tentar novamente</Button>}
@@ -449,16 +661,40 @@ function App() {
             {status.stage === 'ready_for_review' && <Button size="sm" variant="ghost" icon={<RotateCcw size={13} />} onClick={() => run(async () => { await window.voidrCapture.capture.reset(); })}>Nova captura</Button>}
           </div>
           {noteOpen && recording && (
-            <div className="dock-note">
-              <div className="annotation-tabs">
-                <button className={annotationKind === 'element' ? 'active' : ''} onClick={() => setAnnotationKind('element')}><MousePointer2 size={12} /> Elemento</button>
-                <button className={annotationKind === 'screen' ? 'active' : ''} onClick={() => setAnnotationKind('screen')}><Camera size={12} /> Tela</button>
+            <section className="dock-note" role="dialog" aria-label="Adicionar evidência">
+              <header>
+                <div>
+                  <strong>Adicionar evidência</strong>
+                  <span>Escolha o que capturar. O contexto é opcional.</span>
+                </div>
+                <button type="button" aria-label="Fechar" onClick={() => { setNoteOpen(false); void window.voidrCapture.capture.setControlPanel('default'); }}><X size={13} /></button>
+              </header>
+              <div className="annotation-capture-row">
+                <label>
+                  <span>Contexto opcional</span>
+                  <input autoFocus value={note} onChange={(event) => setNote(inputValue(event))} placeholder="Ex.: o botão não responde" />
+                </label>
+                <button type="button" className="annotation-action" disabled={busy} onClick={() => void annotate('element')}>
+                  <MousePointer2 size={14} />
+                  <span><strong>Selecionar elemento</strong><small>Clique na aplicação</small></span>
+                </button>
+                <button type="button" className="annotation-action primary" disabled={busy} onClick={() => void annotate('screen')}>
+                  <Camera size={14} />
+                  <span><strong>Capturar tela</strong><small>Salvar agora</small></span>
+                </button>
               </div>
-              <input autoFocus value={note} onChange={(event) => setNote(inputValue(event))} placeholder="O que precisa de atenção?" onKeyDown={(event) => { if (event.key === 'Enter') void annotate(); }} />
-              <Button size="sm" variant="primary" disabled={busy || !note.trim()} onClick={annotate}>Salvar</Button>
-            </div>
+            </section>
           )}
-          {finalizing && <FinalizationProgress stage={status.stage} agentName={agentName} />}
+          {evidenceOpen && recording && (
+            <EvidenceInspector
+              category={evidenceOpen}
+              label={evidenceItems.find((item) => item.key === evidenceOpen)?.label ?? 'Evidências'}
+              signals={(status.recentSignals ?? []).filter((signal) => signal.category === evidenceOpen)}
+              total={status.evidence[evidenceOpen]}
+              onClose={() => { setEvidenceOpen(undefined); void window.voidrCapture.capture.setControlPanel('default'); }}
+            />
+          )}
+          {finalizing && <FinalizationProgress stage={status.stage} agentName={agentName} elapsedMs={finalizationElapsedMs} />}
           {transcript && <div className="dock-transcript"><Mic size={12} /><span>{transcript}</span></div>}
         </footer>
       )}
@@ -468,18 +704,89 @@ function App() {
   );
 }
 
-function FinalizationProgress({ stage, agentName }: { stage: CaptureStatus['stage']; agentName?: string }) {
-  const active = stage === 'stopping' ? 0 : stage === 'sealed' ? 2 : stage === 'attaching' ? 3 : 3;
-  const labels = finalizationStages.map((label, index) => index === finalizationStages.length - 1 && agentName ? `Preparando retorno ao ${agentName}` : label);
+function EvidenceInspector({
+  category,
+  label,
+  signals,
+  total,
+  onClose,
+}: {
+  category: CapturedSignalCategory;
+  label: string;
+  signals: CapturedSignal[];
+  total: number;
+  onClose: () => void;
+}) {
   return (
-    <div className="finalization-progress" aria-label="Progresso da finalização">
-      {labels.map((label, index) => (
-        <span key={label} className={index < active ? 'done' : index === active ? 'active' : ''}>
-          {index < active ? <CheckCircle2 size={11} /> : index === active ? <Loader2 className="spin" size={11} /> : <span className="step-dot" />}
-          {label}
-        </span>
-      ))}
-    </div>
+    <section className="dock-evidence" role="dialog" aria-label={`Detalhes de ${label.toLowerCase()}`}>
+      <header>
+        <div>
+          <span>Contexto capturado</span>
+          <strong>{label}</strong>
+        </div>
+        <Badge tone={total ? 'success' : 'neutral'}>{total}</Badge>
+        <Button size="sm" variant="ghost" icon={<X size={12} />} onClick={onClose}>Fechar</Button>
+      </header>
+      <div className="dock-evidence-list">
+        {signals.length ? signals.map((signal) => (
+          <article key={signal.id} className={`tone-${signal.tone}`}>
+            <span className="evidence-time">{elapsed(signal.atMs)}</span>
+            <div>
+              <strong>{signal.title}</strong>
+              {signal.detail && <code>{signal.detail}</code>}
+            </div>
+          </article>
+        )) : (
+          <div className="dock-evidence-empty">
+            <Activity size={16} />
+            <div>
+              <strong>Nenhum detalhe nesta captura</strong>
+              <span>{category === 'requests' ? 'As próximas requisições aparecerão aqui com método, status e duração.' : 'Continue a jornada; a Voidr adicionará os eventos automaticamente.'}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FinalizationProgress({
+  stage,
+  agentName,
+  elapsedMs,
+}: {
+  stage: CaptureStatus['stage'];
+  agentName?: string;
+  elapsedMs: number;
+}) {
+  const active = stage === 'stopping' ? 0 : stage === 'sealed' ? 1 : stage === 'attaching' ? 2 : 3;
+  const delayed = elapsedMs >= 15_000;
+  return (
+    <section className="finalization-progress" aria-label="Progresso da finalização" aria-live="polite">
+      {finalizationStages.map((item, index) => {
+        const current = index === active;
+        const title = index === 3 && agentName ? `Entregando ao ${agentName}` : item.title;
+        const detail = current && delayed
+          ? stage === 'processing'
+            ? `Captura segura. ${agentName ? `${agentName} ainda está recebendo o contexto.` : 'A revisão continua em segundo plano.'}`
+            : 'A operação continua ativa; nenhuma evidência será descartada.'
+          : index === 3 && agentName
+            ? 'Microcontexto citado e retomada automática.'
+            : item.detail;
+        return (
+          <div key={item.id} className={`finalization-step${index < active ? ' done' : ''}${current ? ' active' : ''}`}>
+            <span className="finalization-marker" aria-hidden="true">
+              {index < active ? <Check size={12} /> : current ? <Loader2 className="spin" size={12} /> : index + 1}
+            </span>
+            <div>
+              <strong>{title}</strong>
+              <small>{detail}</small>
+            </div>
+            {current && <code>{elapsed(elapsedMs)}</code>}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

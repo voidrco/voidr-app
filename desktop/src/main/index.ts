@@ -28,11 +28,20 @@ const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
 const isAutomation = !app.isPackaged && process.env.VOIDR_CAPTURE_E2E === '1';
 const TOP_BAR_HEIGHT = 58;
 const CAPTURE_DOCK_HEIGHT = 94;
+const controlPanelModeSchema = z.enum(['default', 'annotation', 'evidence', 'finalizing']);
+type ControlPanelMode = z.infer<typeof controlPanelModeSchema>;
+const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
+  default: CAPTURE_DOCK_HEIGHT,
+  annotation: 196,
+  evidence: 270,
+  finalizing: 174,
+};
 
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
 let mainWindowCreation: Promise<void> | undefined;
+let controlPanelMode: ControlPanelMode = 'default';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -64,6 +73,13 @@ const voiceInputSchema = z.object({
 const acceptLaunchSchema = z.object({
   launch: desktopCaptureLaunchSchema,
   runtime: localRuntimeConfigSchema,
+});
+const workspaceLoopInputSchema = z.object({
+  runtime: localRuntimeConfigSchema,
+  loopId: z.string().trim().min(1).max(200),
+});
+const workspaceCycleInputSchema = workspaceLoopInputSchema.extend({
+  cycleId: z.string().uuid(),
 });
 
 function protocolUrlFromArgv(argv: readonly string[]): string | undefined {
@@ -128,7 +144,7 @@ function targetBounds(): Electron.Rectangle {
     x: 0,
     y: TOP_BAR_HEIGHT,
     width,
-    height: Math.max(120, height - TOP_BAR_HEIGHT - CAPTURE_DOCK_HEIGHT),
+    height: Math.max(120, height - TOP_BAR_HEIGHT - CONTROL_PANEL_HEIGHT[controlPanelMode]),
   };
 }
 
@@ -162,6 +178,7 @@ function registerIpc(): void {
     let status = webCapture?.status;
     if (handoff.surface === 'web') {
       status = await webCapture!.prepare({ recordingUrl, runtime: parsed.runtime });
+      if (status.stage === 'ready') status = await webCapture!.start();
     }
     if (
       pendingLaunch?.loopId === parsed.launch.loopId &&
@@ -196,12 +213,36 @@ function registerIpc(): void {
     assertControlSender(event);
     return webCapture!.voiceSegment(voiceInputSchema.parse(input));
   });
+  ipcMain.handle('capture:set-control-panel', (event, input) => {
+    assertControlSender(event);
+    controlPanelMode = controlPanelModeSchema.parse(input);
+    return webCapture?.resize();
+  });
   ipcMain.handle('capture:doctor', async (event, runtime) => {
     assertControlSender(event);
     const parsed = localRuntimeConfigSchema.parse(runtime);
     const client = new VoidrServiceClient(parsed);
     const [services, android] = await Promise.all([client.doctor(), doctorAndroid()]);
     return { services, android };
+  });
+  ipcMain.handle('workspace:list-loops', async (event, runtime) => {
+    assertControlSender(event);
+    return new VoidrServiceClient(localRuntimeConfigSchema.parse(runtime)).listLoops();
+  });
+  ipcMain.handle('workspace:list-cycles', async (event, input) => {
+    assertControlSender(event);
+    const parsed = workspaceLoopInputSchema.parse(input);
+    return new VoidrServiceClient(parsed.runtime).listLoopCycles(parsed.loopId);
+  });
+  ipcMain.handle('workspace:get-cycle', async (event, input) => {
+    assertControlSender(event);
+    const parsed = workspaceCycleInputSchema.parse(input);
+    return new VoidrServiceClient(parsed.runtime).getLoopCycle(parsed.loopId, parsed.cycleId);
+  });
+  ipcMain.handle('workspace:start-cycle', async (event, input) => {
+    assertControlSender(event);
+    const parsed = workspaceLoopInputSchema.parse(input);
+    return new VoidrServiceClient(parsed.runtime).prepareLoopCycle(parsed.loopId);
   });
   ipcMain.handle('mobile:devices', async (event) => {
     assertControlSender(event);

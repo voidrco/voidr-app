@@ -5,6 +5,9 @@ import type {
   CaptureStatus,
   DesktopCaptureLaunch,
   DesktopCaptureResolution,
+  DesktopLoopCycleDetail,
+  DesktopLoopCycleSummary,
+  DesktopLoopSummary,
   LocalRuntimeConfig,
   MobileAttachInput,
   PrepareWebInput,
@@ -13,6 +16,9 @@ import {
   captureStatusSchema,
   desktopCaptureLaunchSchema,
   desktopCaptureResolutionSchema,
+  desktopLoopCycleDetailSchema,
+  desktopLoopCycleSummarySchema,
+  desktopLoopSummarySchema,
 } from '@voidr/capture-contracts';
 
 type Unsubscribe = () => void;
@@ -59,6 +65,10 @@ const api = {
       pcmBase64: string;
       language?: string;
     }): Promise<{ transcript: string }> => ipcRenderer.invoke('capture:voice-segment', input),
+    setControlPanel: (
+      mode: 'default' | 'annotation' | 'evidence' | 'finalizing',
+    ): Promise<{ x: number; y: number; width: number; height: number } | undefined> =>
+      ipcRenderer.invoke('capture:set-control-panel', mode),
     onStatus: (callback: (status: CaptureStatus) => void): Unsubscribe => {
       const listener = (_event: Electron.IpcRendererEvent, status: CaptureStatus) => {
         const parsed = captureStatusSchema.safeParse(status);
@@ -77,6 +87,31 @@ const api = {
     },
   },
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
+  workspace: {
+    listLoops: (runtime: LocalRuntimeConfig): Promise<DesktopLoopSummary[]> =>
+      ipcRenderer
+        .invoke('workspace:list-loops', runtime)
+        .then((value) => z.array(desktopLoopSummarySchema).parse(value)),
+    listCycles: (
+      runtime: LocalRuntimeConfig,
+      loopId: string,
+    ): Promise<DesktopLoopCycleSummary[]> =>
+      ipcRenderer
+        .invoke('workspace:list-cycles', { runtime, loopId })
+        .then((value) => z.array(desktopLoopCycleSummarySchema).parse(value)),
+    getCycle: (
+      runtime: LocalRuntimeConfig,
+      loopId: string,
+      cycleId: string,
+    ): Promise<DesktopLoopCycleDetail> =>
+      ipcRenderer
+        .invoke('workspace:get-cycle', { runtime, loopId, cycleId })
+        .then((value) => desktopLoopCycleDetailSchema.parse(value)),
+    startCycle: (runtime: LocalRuntimeConfig, loopId: string): Promise<DesktopCaptureLaunch> =>
+      ipcRenderer
+        .invoke('workspace:start-cycle', { runtime, loopId })
+        .then((value) => desktopCaptureLaunchSchema.parse(value)),
+  },
   mobile: {
     devices: (): Promise<{ available: boolean; devices: AndroidDevice[]; message: string; version?: string }> =>
       ipcRenderer.invoke('mobile:devices'),
