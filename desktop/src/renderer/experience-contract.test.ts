@@ -119,16 +119,19 @@ describe('desktop experience contract', () => {
     expect(styleSource).toContain('.dock-evidence');
   });
 
-  it('makes element and screen capture immediate while keeping context optional', () => {
-    expect(appSource).toContain("onClick={() => void annotate('element')}");
-    expect(appSource).toContain("onClick={() => void annotate('screen')}");
-    expect(appSource).toContain('Selecionar elemento');
-    expect(appSource).toContain('Capturar tela');
-    expect(appSource).toContain('O contexto é opcional.');
-    expect(appSource).toContain("suppliedNote || fallbackNote");
-    expect(appSource).not.toContain('disabled={busy || !note.trim()}');
-    expect(appSource).not.toContain('>Salvar</Button>');
-    expect(styleSource).toContain('.annotation-action.primary');
+  it('matches the extension contract: select, explain, then explicitly save', () => {
+    expect(appSource).toContain("onClick={() => void beginAnnotation('element')}");
+    expect(appSource).toContain("onClick={() => void beginAnnotation('screen')}");
+    expect(appSource).toContain('capture.selectElement()');
+    expect(appSource).toContain('O que deve ser investigado?');
+    expect(appSource).toContain('Inclua esperado × observado quando ajudar · Enter salva');
+    expect(appSource).toContain('Salvar anotação');
+    expect(appSource).toContain('disabled={busy || !note.trim()}');
+    expect(appSource).toContain('capture.clearElementSelection()');
+    expect(appSource).not.toContain('fallbackNote');
+    expect(appSource).not.toContain('Elemento salvo');
+    expect(appSource).not.toContain('Nenhuma nota era obrigatória');
+    expect(styleSource).toContain('.dock-note-composer textarea');
   });
 
   it('makes every automatic evidence category inspectable from the recording dock', () => {

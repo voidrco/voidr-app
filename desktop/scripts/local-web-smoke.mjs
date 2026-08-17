@@ -231,16 +231,16 @@ async function main() {
       throw new Error('A contagem de requests não trouxe contexto inspecionável.');
     }
 
-    await waitFor('Dock da captura automática', async () => {
+    await waitFor('Ação de nota', async () => {
       const ready = await control.evaluate(`Boolean(
         [...document.querySelectorAll('.dock-actions button')]
-          .find((item)=>item.textContent?.trim()==='Evidência')
+          .find((item)=>item.textContent?.trim()==='Nota')
       )`);
       return ready || undefined;
     });
     await control.evaluate(`(()=>{
-      const button=[...document.querySelectorAll('.dock-actions button')].find((item)=>item.textContent?.trim()==='Evidência');
-      if(!button) throw new Error('Ação Evidência não encontrada.');
+      const button=[...document.querySelectorAll('.dock-actions button')].find((item)=>item.textContent?.trim()==='Nota');
+      if(!button) throw new Error('Ação Nota não encontrada.');
       button.click();
       return true;
     })()`);
@@ -260,18 +260,64 @@ async function main() {
         : undefined;
     });
 
+    const notesBeforeScreen = Number((await control.evaluate(
+      'window.voidrCapture.capture.status()',
+    ))?.evidence?.notes ?? 0);
     await control.evaluate(`(()=>{
       const screen=[...document.querySelectorAll('.annotation-action')]
-        .find((item)=>item.textContent?.includes('Capturar tela'));
-      const input=document.querySelector('.dock-note input');
-      if(!screen||!input) throw new Error('Ações de evidência incompletas.');
-      if(input.value) throw new Error('O smoke exige captura sem nota obrigatória.');
+        .find((item)=>item.textContent?.includes('Tela'));
+      if(!screen) throw new Error('Ação de nota na tela não encontrada.');
       screen.click();
       return true;
     })()`);
+    await waitFor('Composer da nota na tela', async () => {
+      const state = await control.evaluate(`(()=>({
+        title:document.querySelector('.dock-note-composer')?.textContent||'',
+        saveDisabled:document.querySelector('.annotation-composer-actions button')?.disabled,
+      }))()`);
+      return state?.title.includes('O que deve ser investigado?') && state.saveDisabled === true
+        ? state
+        : undefined;
+    });
+    const composerBounds = await control.evaluate(
+      `window.voidrCapture.capture.setControlPanel('annotation-composer')`,
+    );
+    const composerTargetHeight = await waitFor('Área nativa reservada para o composer', async () => {
+      const rendererReady = await control.evaluate(
+        `document.querySelector('.capture-shell')?.classList.contains('capture-shell-note-composer')`,
+      );
+      const panelTop = await control.evaluate(
+        `document.querySelector('.dock-note-composer')?.getBoundingClientRect().top`,
+      );
+      const targetBottom = Number(composerBounds?.y ?? 0) + Number(composerBounds?.height ?? 0);
+      return rendererReady && composerBounds?.height <= defaultTargetHeight - 150 && panelTop >= targetBottom
+        ? composerBounds.height
+        : undefined;
+    });
+    const notesWithoutScreenNote = Number((await control.evaluate(
+      'window.voidrCapture.capture.status()',
+    ))?.evidence?.notes ?? 0);
+    if (notesWithoutScreenNote !== notesBeforeScreen) {
+      throw new Error('Abrir a nota na tela persistiu evidência antes da confirmação.');
+    }
+    await control.evaluate(`(()=>{
+      const textarea=document.querySelector('.dock-note-composer textarea');
+      if(!textarea) throw new Error('Campo da anotação de tela ausente.');
+      const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;
+      setter.call(textarea,'Após o retry, o estado carregando permanece indefinidamente.');
+      textarea.dispatchEvent(new Event('input',{bubbles:true}));
+      return true;
+    })()`);
+    await waitFor('Salvar anotação na tela habilitado', async () => {
+      const enabled = await control.evaluate(
+        `document.querySelector('.annotation-composer-actions button')?.disabled===false`,
+      );
+      return enabled || undefined;
+    });
+    await control.evaluate(`document.querySelector('.annotation-composer-actions button').click()`);
     await waitFor('Persistência da nota', async () => {
       const value = await control.evaluate('window.voidrCapture.capture.status()');
-      return value?.evidence?.notes > 0 ? value : undefined;
+      return value?.evidence?.notes === notesBeforeScreen + 1 ? value : undefined;
     }, 30_000);
 
     const restoredAfterNoteBounds = await control.evaluate(
@@ -283,22 +329,22 @@ async function main() {
     }
     await control.evaluate(`(()=>{
       const button=[...document.querySelectorAll('.dock-actions button')]
-        .find((item)=>item.textContent?.trim()==='Evidência');
-      if(!button) throw new Error('Ação Evidência não encontrada para selecionar elemento.');
+        .find((item)=>item.textContent?.trim()==='Nota');
+      if(!button) throw new Error('Ação Nota não encontrada para selecionar elemento.');
       button.click();
       return true;
     })()`);
-    await waitFor('Ação de selecionar elemento', async () => {
+    await waitFor('Ação de nota em elemento', async () => {
       const ready = await control.evaluate(`Boolean(
         [...document.querySelectorAll('.annotation-action')]
-          .find((item)=>item.textContent?.includes('Selecionar elemento'))
+          .find((item)=>item.textContent?.includes('Elemento'))
       )`);
       return ready || undefined;
     });
     await control.evaluate(`(()=>{
       const button=[...document.querySelectorAll('.annotation-action')]
-        .find((item)=>item.textContent?.includes('Selecionar elemento'));
-      if(!button) throw new Error('Selecionar elemento não está disponível.');
+        .find((item)=>item.textContent?.includes('Elemento'));
+      if(!button) throw new Error('Nota em elemento não está disponível.');
       button.click();
       return true;
     })()`);
@@ -321,9 +367,36 @@ async function main() {
         ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 }),
       });
     }
-    await waitFor('Persistência do elemento sem nota', async () => {
+    await waitFor('Composer após selecionar elemento', async () => {
+      const title = await control.evaluate(`document.querySelector('.dock-note-composer')?.textContent`);
+      return title?.includes('Nota em elemento') && title.includes('O que deve ser investigado?')
+        ? title
+        : undefined;
+    });
+    const notesAfterSelection = Number((await control.evaluate(
+      'window.voidrCapture.capture.status()',
+    ))?.evidence?.notes ?? 0);
+    if (notesAfterSelection !== notesBeforeScreen + 1) {
+      throw new Error('Selecionar um elemento criou evidência sem uma nota confirmada.');
+    }
+    await control.evaluate(`(()=>{
+      const textarea=document.querySelector('.dock-note-composer textarea');
+      if(!textarea) throw new Error('Campo da anotação em elemento ausente.');
+      const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;
+      setter.call(textarea,'Esperado: habilitar o CTA. Observado: continua bloqueado.');
+      textarea.dispatchEvent(new Event('input',{bubbles:true}));
+      return true;
+    })()`);
+    await waitFor('Salvar anotação em elemento habilitado', async () => {
+      const enabled = await control.evaluate(
+        `document.querySelector('.annotation-composer-actions button')?.disabled===false`,
+      );
+      return enabled || undefined;
+    });
+    await control.evaluate(`document.querySelector('.annotation-composer-actions button').click()`);
+    await waitFor('Persistência da nota em elemento', async () => {
       const value = await control.evaluate('window.voidrCapture.capture.status()');
-      return value?.evidence?.notes > 1 ? value : undefined;
+      return value?.evidence?.notes === notesBeforeScreen + 2 ? value : undefined;
     }, 30_000);
     await control.evaluate(`(()=>{
       const button=document.querySelector('button[title="Ver requisições"]');
@@ -409,6 +482,7 @@ async function main() {
           nativeTargetLayout: {
             defaultHeight: defaultTargetHeight,
             noteHeight: noteTargetHeight,
+            composerHeight: composerTargetHeight,
             evidenceHeight: evidenceTargetHeight,
             restoredHeight: restoredAfterNote,
           },

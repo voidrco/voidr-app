@@ -93,10 +93,18 @@ describe('Electron security contract', () => {
   });
 
   it('resizes the native target instead of relying on renderer z-index', () => {
-    expect(mainSource).toContain("z.enum(['default', 'annotation', 'evidence', 'finalizing'])");
+    expect(mainSource).toContain("'annotation-composer'");
     expect(mainSource).toContain("ipcMain.handle('capture:set-control-panel'");
     expect(mainSource).toContain('CONTROL_PANEL_HEIGHT[controlPanelMode]');
     expect(mainSource).toContain('webCapture?.resize()');
+  });
+
+  it('keeps element selection ephemeral until a note is explicitly saved', () => {
+    expect(mainSource).toContain("ipcMain.handle('capture:select-element'");
+    expect(mainSource).toContain("ipcMain.handle('capture:clear-element-selection'");
+    expect(captureSource).toContain('this.#selectedElement = await this.#selectElement()');
+    expect(captureSource).toContain('Selecione um elemento antes de salvar a anotação.');
+    expect(captureSource).toContain("if (annotation.kind === 'element') this.#selectedElement = undefined");
   });
 
   it('captures initial, live, redirected and failed network activity without raw secrets', () => {

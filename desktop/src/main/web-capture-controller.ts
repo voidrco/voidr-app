@@ -84,6 +84,7 @@ export class WebCaptureController {
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
   };
+  #selectedElement?: SelectedElement;
 
   constructor(
     private readonly window: BrowserWindow,
@@ -255,7 +256,10 @@ export class WebCaptureController {
     if (this.#state.stage !== 'recording' || !this.#view || !this.#authorization || !this.#client) {
       throw new Error('Anotações ficam disponíveis durante a gravação.');
     }
-    const selected = annotation.kind === 'element' ? await this.#selectElement() : undefined;
+    const selected = annotation.kind === 'element' ? this.#selectedElement : undefined;
+    if (annotation.kind === 'element' && !selected) {
+      throw new Error('Selecione um elemento antes de salvar a anotação.');
+    }
     const dataBase64 = await this.#captureJpegBase64();
     const uploaded = await this.#client.verificationIngest(this.#authorization, 'evidence-assets', {
       generation: this.#authorization.safeContext.verificationGeneration,
@@ -291,7 +295,32 @@ export class WebCaptureController {
       redactText(annotation.note).slice(0, 1_000),
     );
     this.#increment('notes');
+    if (annotation.kind === 'element') this.#selectedElement = undefined;
     return { evidenceRef };
+  }
+
+  async selectElement(): Promise<{ selected: true }> {
+    if (this.#state.stage !== 'recording' || !this.#view || !this.#authorization) {
+      throw new Error('A seleção de elementos exige uma gravação ativa.');
+    }
+    this.#selectedElement = undefined;
+    this.#selectedElement = await this.#selectElement();
+    return { selected: true };
+  }
+
+  async clearElementSelection(): Promise<void> {
+    this.#selectedElement = undefined;
+    const pending = this.#pendingElement;
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.#pendingElement = undefined;
+      pending.reject(new Error('A seleção foi cancelada.'));
+    }
+    if (this.#view?.webContents.debugger.isAttached()) {
+      try {
+        await this.#view.webContents.debugger.sendCommand('Overlay.setInspectMode', { mode: 'none' });
+      } catch {}
+    }
   }
 
   async #captureJpegBase64(): Promise<string> {
@@ -383,6 +412,7 @@ export class WebCaptureController {
     this.#stopSignalPolling();
     this.#pendingElement?.reject(new Error('A seleção foi cancelada.'));
     this.#pendingElement = undefined;
+    this.#selectedElement = undefined;
     if (this.#view) {
       try {
         if (this.#view.webContents.debugger.isAttached()) this.#view.webContents.debugger.detach();
@@ -452,6 +482,12 @@ export class WebCaptureController {
           'WEB_TARGET_GONE',
           this.#stopReceipt ? 'attach' : 'stop',
         );
+      }
+    });
+    view.webContents.on('before-input-event', (event, input) => {
+      if (this.#pendingElement && input.type === 'keyDown' && input.key === 'Escape') {
+        event.preventDefault();
+        void this.clearElementSelection();
       }
     });
     view.webContents.session.on('will-download', (event) => event.preventDefault());

@@ -57,6 +57,10 @@ const api = {
     startWeb: (): Promise<CaptureStatus> => invokeStatus('capture:start-web'),
     stopWeb: (): Promise<CaptureStatus> => invokeStatus('capture:stop-web'),
     reset: (): Promise<CaptureStatus> => invokeStatus('capture:reset'),
+    selectElement: (): Promise<{ selected: true }> =>
+      ipcRenderer.invoke('capture:select-element'),
+    clearElementSelection: (): Promise<void> =>
+      ipcRenderer.invoke('capture:clear-element-selection'),
     annotate: (input: { kind: 'element' | 'screen'; note: string }) =>
       ipcRenderer.invoke('capture:annotate', input),
     voiceSegment: (input: {
@@ -66,7 +70,7 @@ const api = {
       language?: string;
     }): Promise<{ transcript: string }> => ipcRenderer.invoke('capture:voice-segment', input),
     setControlPanel: (
-      mode: 'default' | 'annotation' | 'evidence' | 'finalizing',
+      mode: 'default' | 'annotation' | 'annotation-composer' | 'evidence' | 'finalizing',
     ): Promise<{ x: number; y: number; width: number; height: number } | undefined> =>
       ipcRenderer.invoke('capture:set-control-panel', mode),
     onStatus: (callback: (status: CaptureStatus) => void): Unsubscribe => {

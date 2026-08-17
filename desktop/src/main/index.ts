@@ -28,11 +28,18 @@ const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
 const isAutomation = !app.isPackaged && process.env.VOIDR_CAPTURE_E2E === '1';
 const TOP_BAR_HEIGHT = 58;
 const CAPTURE_DOCK_HEIGHT = 94;
-const controlPanelModeSchema = z.enum(['default', 'annotation', 'evidence', 'finalizing']);
+const controlPanelModeSchema = z.enum([
+  'default',
+  'annotation',
+  'annotation-composer',
+  'evidence',
+  'finalizing',
+]);
 type ControlPanelMode = z.infer<typeof controlPanelModeSchema>;
 const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
   default: CAPTURE_DOCK_HEIGHT,
   annotation: 196,
+  'annotation-composer': 286,
   evidence: 270,
   finalizing: 174,
 };
@@ -208,6 +215,14 @@ function registerIpc(): void {
   ipcMain.handle('capture:annotate', async (event, input) => {
     assertControlSender(event);
     return webCapture!.annotate(annotationInputSchema.parse(input));
+  });
+  ipcMain.handle('capture:select-element', async (event) => {
+    assertControlSender(event);
+    return webCapture!.selectElement();
+  });
+  ipcMain.handle('capture:clear-element-selection', async (event) => {
+    assertControlSender(event);
+    await webCapture!.clearElementSelection();
   });
   ipcMain.handle('capture:voice-segment', async (event, input) => {
     assertControlSender(event);

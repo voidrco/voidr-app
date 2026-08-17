@@ -93,6 +93,7 @@ function App() {
   const [doctor, setDoctor] = useState<DoctorResult>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  const [annotationKind, setAnnotationKind] = useState<'element' | 'screen'>();
   const [evidenceOpen, setEvidenceOpen] = useState<CapturedSignalCategory>();
   const [note, setNote] = useState('');
   const [annotationNotice, setAnnotationNotice] = useState<AnnotationNotice>();
@@ -124,7 +125,9 @@ function App() {
   const agentName = status.context?.harnessName;
   const harnessDeliveryState = status.context?.harnessDeliveryState;
   const controlPanelMode = noteOpen && recording
-    ? 'annotation'
+    ? annotationKind
+      ? 'annotation-composer'
+      : 'annotation'
     : evidenceOpen && recording
       ? 'evidence'
       : finalizing
@@ -232,6 +235,8 @@ function App() {
   useEffect(() => {
     if (recording) return;
     setNoteOpen(false);
+    setAnnotationKind(undefined);
+    setNote('');
     setEvidenceOpen(undefined);
   }, [recording]);
 
@@ -286,52 +291,116 @@ function App() {
       await window.voidrCapture.capture.startWeb();
     });
 
-  const annotate = async (kind: 'element' | 'screen') => {
+  const beginAnnotation = async (kind: 'element' | 'screen') => {
     if (busy) return;
     if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
-    const suppliedNote = note.trim();
-    const fallbackNote = kind === 'element'
-      ? 'Elemento destacado durante o teste.'
-      : 'Estado da tela capturado durante o teste.';
+    setEvidenceOpen(undefined);
+    setNote('');
+    if (kind === 'screen') {
+      await window.voidrCapture.capture.clearElementSelection();
+      setAnnotationKind('screen');
+      setNoteOpen(true);
+      setAnnotationNotice(undefined);
+      return;
+    }
+
     setBusy(true);
     setNoteOpen(false);
-    setEvidenceOpen(undefined);
+    setAnnotationKind(undefined);
     setAnnotationNotice({
       tone: 'info',
       kind,
       active: true,
-      title: kind === 'element' ? 'Selecione um elemento' : 'Capturando a tela',
-      message: kind === 'element'
-        ? 'Passe o cursor pela aplicação e clique no ponto que precisa de atenção.'
-        : 'Salvando uma imagem do estado atual.',
+      title: 'Selecione um elemento',
+      message: 'Clique na aplicação · Esc para cancelar',
     });
     try {
       await window.voidrCapture.capture.setControlPanel('default');
-      await window.voidrCapture.capture.annotate({ kind, note: suppliedNote || fallbackNote });
+      await window.voidrCapture.capture.selectElement();
+      setAnnotationNotice(undefined);
+      setAnnotationKind('element');
+      setNoteOpen(true);
+      await window.voidrCapture.capture.setControlPanel('annotation-composer');
+    } catch (error) {
+      const message = safeError(error);
+      if (message.includes('seleção foi cancelada')) {
+        setAnnotationNotice(undefined);
+      } else {
+        setAnnotationNotice({
+          tone: 'error',
+          kind,
+          active: false,
+          title: 'Não foi possível selecionar o elemento',
+          message,
+        });
+        annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 6_000);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelAnnotation = async () => {
+    setNoteOpen(false);
+    setAnnotationKind(undefined);
+    setNote('');
+    setAnnotationNotice(undefined);
+    await window.voidrCapture.capture.clearElementSelection();
+    await window.voidrCapture.capture.setControlPanel('default');
+  };
+
+  const saveAnnotation = async () => {
+    if (busy || !annotationKind || !note.trim()) return;
+    if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
+    const kind = annotationKind;
+    const suppliedNote = note.trim();
+    setBusy(true);
+    setNoteOpen(false);
+    setAnnotationNotice({
+      tone: 'info',
+      kind,
+      active: true,
+      title: 'Salvando anotação',
+    });
+    try {
+      await window.voidrCapture.capture.setControlPanel('default');
+      await window.voidrCapture.capture.annotate({ kind, note: suppliedNote });
+      setAnnotationKind(undefined);
       setNote('');
       setAnnotationNotice({
         tone: 'success',
         kind,
         active: false,
-        title: kind === 'element' ? 'Elemento salvo' : 'Tela salva',
-        message: suppliedNote
-          ? 'Imagem e contexto foram adicionados ao ciclo.'
-          : 'A evidência foi adicionada ao ciclo. Nenhuma nota era obrigatória.',
+        title: 'Anotação salva',
+        message: 'A nota e a captura foram adicionadas ao ciclo.',
       });
-      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 3_500);
+      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 2_200);
     } catch (error) {
+      setNoteOpen(true);
       setAnnotationNotice({
         tone: 'error',
         kind,
         active: false,
-        title: 'Não foi possível salvar a evidência',
+        title: 'Não foi possível salvar a anotação',
         message: safeError(error),
       });
+      await window.voidrCapture.capture.setControlPanel('annotation-composer');
       annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 6_000);
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!noteOpen || !annotationKind) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      void cancelAnnotation();
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [noteOpen, annotationKind]);
 
   const toggleVoice = () =>
     run(async () => {
@@ -410,7 +479,7 @@ function App() {
   );
 
   return (
-    <div className={`capture-shell${activeCapture ? ' capture-shell-active' : ''}${finalizing ? ' capture-shell-finalizing' : ''}${noteOpen && recording ? ' capture-shell-note' : ''}${evidenceOpen && recording ? ' capture-shell-evidence' : ''}`}>
+    <div className={`capture-shell${activeCapture ? ' capture-shell-active' : ''}${finalizing ? ' capture-shell-finalizing' : ''}${noteOpen && recording ? ' capture-shell-note' : ''}${noteOpen && annotationKind && recording ? ' capture-shell-note-composer' : ''}${evidenceOpen && recording ? ' capture-shell-evidence' : ''}`}>
       <header className="capture-topbar">
         <VoidrBrand />
         <div className="capture-topbar-context">
@@ -642,6 +711,9 @@ function App() {
                   onClick={() => {
                     const next = evidenceOpen === key ? undefined : key;
                     setNoteOpen(false);
+                    setAnnotationKind(undefined);
+                    setNote('');
+                    void window.voidrCapture.capture.clearElementSelection();
                     setEvidenceOpen(next);
                     void window.voidrCapture.capture.setControlPanel(next ? 'evidence' : 'default');
                   }}
@@ -653,7 +725,7 @@ function App() {
           )}
           <div className="dock-actions">
             {status.stage === 'ready' && <Button size="sm" variant="primary" icon={<Play size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.startWeb(); })}>Iniciar captura</Button>}
-            {recording && <Button size="sm" variant={noteOpen ? 'primary' : 'secondary'} icon={<Camera size={13} />} disabled={busy} onClick={() => { const next = !noteOpen; setEvidenceOpen(undefined); setNoteOpen(next); void window.voidrCapture.capture.setControlPanel(next ? 'annotation' : 'default'); }}>Evidência</Button>}
+            {recording && <Button size="sm" variant={noteOpen ? 'primary' : 'secondary'} icon={<MessageSquare size={13} />} disabled={busy} onClick={() => { if (noteOpen) { void cancelAnnotation(); return; } setEvidenceOpen(undefined); setAnnotationKind(undefined); setNote(''); setNoteOpen(true); void window.voidrCapture.capture.setControlPanel('annotation'); }}>Nota</Button>}
             {recording && <Button size="sm" variant={audio ? 'danger' : 'secondary'} icon={audio ? <Square size={12} /> : <Mic size={13} />} disabled={busy} onClick={toggleVoice}>{audio ? 'Enviar voz' : 'Voz'}</Button>}
             {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Finalizar</Button>}
             {status.stage === 'recoverable_error' && <Button size="sm" variant="primary" icon={<RefreshCw size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Tentar novamente</Button>}
@@ -661,28 +733,57 @@ function App() {
             {status.stage === 'ready_for_review' && <Button size="sm" variant="ghost" icon={<RotateCcw size={13} />} onClick={() => run(async () => { await window.voidrCapture.capture.reset(); })}>Nova captura</Button>}
           </div>
           {noteOpen && recording && (
-            <section className="dock-note" role="dialog" aria-label="Adicionar evidência">
-              <header>
-                <div>
-                  <strong>Adicionar evidência</strong>
-                  <span>Escolha o que capturar. O contexto é opcional.</span>
-                </div>
-                <button type="button" aria-label="Fechar" onClick={() => { setNoteOpen(false); void window.voidrCapture.capture.setControlPanel('default'); }}><X size={13} /></button>
-              </header>
-              <div className="annotation-capture-row">
-                <label>
-                  <span>Contexto opcional</span>
-                  <input autoFocus value={note} onChange={(event) => setNote(inputValue(event))} placeholder="Ex.: o botão não responde" />
-                </label>
-                <button type="button" className="annotation-action" disabled={busy} onClick={() => void annotate('element')}>
-                  <MousePointer2 size={14} />
-                  <span><strong>Selecionar elemento</strong><small>Clique na aplicação</small></span>
-                </button>
-                <button type="button" className="annotation-action primary" disabled={busy} onClick={() => void annotate('screen')}>
-                  <Camera size={14} />
-                  <span><strong>Capturar tela</strong><small>Salvar agora</small></span>
-                </button>
-              </div>
+            <section className={`dock-note${annotationKind ? ' dock-note-composer' : ''}`} role="dialog" aria-modal="true" aria-labelledby="annotation-title">
+              {annotationKind ? (
+                <>
+                  <header>
+                    <div>
+                      <span className="annotation-kicker">{annotationKind === 'element' ? 'Nota em elemento' : 'Nota na tela'}</span>
+                      <strong id="annotation-title">O que deve ser investigado?</strong>
+                    </div>
+                    <button type="button" aria-label="Cancelar anotação" onClick={() => void cancelAnnotation()}><X size={13} /></button>
+                  </header>
+                  <textarea
+                    autoFocus
+                    maxLength={1000}
+                    value={note}
+                    onChange={(event) => setNote(inputValue(event))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey && note.trim()) {
+                        event.preventDefault();
+                        void saveAnnotation();
+                      }
+                    }}
+                    placeholder="Ex.: depois do retry, o botão continua desabilitado"
+                  />
+                  <div className="annotation-composer-actions">
+                    <span>Inclua esperado × observado quando ajudar · Enter salva</span>
+                    <Button size="sm" variant="primary" disabled={busy || !note.trim()} onClick={() => void saveAnnotation()}>
+                      Salvar anotação
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <header>
+                    <div>
+                      <span className="annotation-kicker">Adicionar nota</span>
+                      <strong id="annotation-title">Onde está o problema?</strong>
+                    </div>
+                    <button type="button" aria-label="Fechar" onClick={() => void cancelAnnotation()}><X size={13} /></button>
+                  </header>
+                  <div className="annotation-capture-row">
+                    <button type="button" className="annotation-action" disabled={busy} onClick={() => void beginAnnotation('element')}>
+                      <MousePointer2 size={14} />
+                      <span><strong>Elemento</strong><small>Selecione algo na tela</small></span>
+                    </button>
+                    <button type="button" className="annotation-action" disabled={busy} onClick={() => void beginAnnotation('screen')}>
+                      <Camera size={14} />
+                      <span><strong>Tela</strong><small>Capture o viewport atual</small></span>
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
           )}
           {evidenceOpen && recording && (
