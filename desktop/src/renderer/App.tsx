@@ -75,17 +75,8 @@ import {
   type VoiceVisualFlow,
   type VoiceVisualFlowEvent,
 } from './voice-flow';
+import { defaultRuntime } from './channels';
 import { WorkspaceHome } from './WorkspaceHome';
-
-const defaultRuntime: LocalRuntimeConfig = {
-  serviceUrl: 'http://127.0.0.1:3000/v1',
-  collectorUrl: 'http://localhost:3100',
-  collectorScriptUrl: 'http://localhost:8889/dist/recorder.min.js',
-  platformUrl: 'http://localhost:3030',
-  localAdapter: true,
-  localDevKey: 'voidr-verification-local',
-  organizationId: 'org_verification_local',
-};
 
 const idleStatus: CaptureStatus = {
   stage: 'idle',
@@ -292,7 +283,10 @@ function App() {
           });
       return;
     }
-    const launchRuntime = runtime.localAdapter && runtime.organizationId !== launch.organizationId
+    // The organization is never baked into the build — it arrives with the deep
+    // link. Gating this on localAdapter kept every packaged build pinned to the
+    // placeholder tenant.
+    const launchRuntime = runtime.organizationId !== launch.organizationId
       ? { ...runtime, organizationId: launch.organizationId }
       : runtime;
     acceptingLaunch.current = key;
