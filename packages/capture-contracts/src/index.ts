@@ -1,27 +1,34 @@
-import { z } from 'zod';
+import { z } from "zod";
 
-export const CAPTURE_HOST_VERSION = 'CAPTURE-HOST/1' as const;
-export const VOIDR_CAPTURE_LAUNCH_VERSION = 'VOIDR-CAPTURE-LAUNCH/1' as const;
+export const CAPTURE_HOST_VERSION = "CAPTURE-HOST/1" as const;
+export const VOIDR_CAPTURE_LAUNCH_VERSION = "VOIDR-CAPTURE-LAUNCH/1" as const;
 
 const boundedId = z.string().trim().min(1).max(200);
 const opaqueId = z.string().uuid();
 
 export function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return (
-    normalized === 'localhost' ||
-    normalized.endsWith('.localhost') ||
-    normalized === '::1' ||
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "::1" ||
     /^127(?:\.\d{1,3}){3}$/.test(normalized)
   );
 }
 
-export function isTrustedWebUrl(input: string, allowLoopbackHttp = true): boolean {
+export function isTrustedWebUrl(
+  input: string,
+  allowLoopbackHttp = true,
+): boolean {
   try {
     const url = new URL(input);
     if (url.username || url.password) return false;
-    if (url.protocol === 'https:') return true;
-    return allowLoopbackHttp && url.protocol === 'http:' && isLoopbackHostname(url.hostname);
+    if (url.protocol === "https:") return true;
+    return (
+      allowLoopbackHttp &&
+      url.protocol === "http:" &&
+      isLoopbackHostname(url.hostname)
+    );
   } catch {
     return false;
   }
@@ -31,20 +38,23 @@ const trustedWebUrlSchema = z
   .string()
   .url()
   .max(16_384)
-  .refine((value) => isTrustedWebUrl(value), 'Use HTTPS ou HTTP em loopback, sem credenciais na URL.');
+  .refine(
+    (value) => isTrustedWebUrl(value),
+    "Use HTTPS ou HTTP em loopback, sem credenciais na URL.",
+  );
 
-export const capturePlatformSchema = z.enum(['web', 'android', 'ios', 'api']);
+export const capturePlatformSchema = z.enum(["web", "android", "ios", "api"]);
 export type CapturePlatform = z.infer<typeof capturePlatformSchema>;
 
-export const desktopCaptureSurfaceSchema = z.enum(['web', 'mobile', 'api']);
+export const desktopCaptureSurfaceSchema = z.enum(["web", "mobile", "api"]);
 export type DesktopCaptureSurface = z.infer<typeof desktopCaptureSurfaceSchema>;
 
 export const harnessDeliveryStateSchema = z.enum([
-  'waiting',
-  'preparing',
-  'available',
-  'acknowledged',
-  'failed',
+  "waiting",
+  "preparing",
+  "available",
+  "acknowledged",
+  "failed",
 ]);
 export type HarnessDeliveryState = z.infer<typeof harnessDeliveryStateSchema>;
 
@@ -68,12 +78,14 @@ export const desktopCycleParticipantSchema = z.object({
   role: z.string().trim().min(1).max(120).nullable(),
   picture: trustedWebUrlSchema.nullable(),
 });
-export type DesktopCycleParticipant = z.infer<typeof desktopCycleParticipantSchema>;
+export type DesktopCycleParticipant = z.infer<
+  typeof desktopCycleParticipantSchema
+>;
 
 /** Safe projection returned to the control renderer after main-process resolution. */
 export const desktopCaptureResolutionSchema = z.object({
   version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
-  captureAdapter: z.literal('voidr_app'),
+  captureAdapter: z.literal("voidr_app"),
   surface: desktopCaptureSurfaceSchema,
   loopId: boundedId,
   cycleId: opaqueId,
@@ -86,40 +98,42 @@ export const desktopCaptureResolutionSchema = z.object({
   cycleStartedAt: z.string().datetime(),
   harnessName: z.string().trim().max(120).optional(),
 });
-export type DesktopCaptureResolution = z.infer<typeof desktopCaptureResolutionSchema>;
+export type DesktopCaptureResolution = z.infer<
+  typeof desktopCaptureResolutionSchema
+>;
 
 export const captureStageSchema = z.enum([
-  'idle',
-  'preparing',
-  'ready',
-  'recording',
-  'stopping',
-  'sealed',
-  'attaching',
-  'processing',
-  'ready_for_review',
-  'offline',
-  'recoverable_error',
-  'terminal_error',
+  "idle",
+  "preparing",
+  "ready",
+  "recording",
+  "stopping",
+  "sealed",
+  "attaching",
+  "processing",
+  "ready_for_review",
+  "offline",
+  "recoverable_error",
+  "terminal_error",
 ]);
 export type CaptureStage = z.infer<typeof captureStageSchema>;
 
 export const captureEnvelopeSchema = z.object({
   version: z.literal(CAPTURE_HOST_VERSION),
   id: opaqueId,
-  type: z.enum(['request', 'receipt', 'event']),
+  type: z.enum(["request", "receipt", "event"]),
   command: z.enum([
-    'doctor',
-    'prepare.web',
-    'start.web',
-    'stop.web',
-    'annotate.element',
-    'annotate.screen',
-    'mobile.devices',
-    'mobile.launch',
-    'mobile.session.discover',
-    'mobile.session.attach',
-    'open.cycle',
+    "doctor",
+    "prepare.web",
+    "start.web",
+    "stop.web",
+    "annotate.element",
+    "annotate.screen",
+    "mobile.devices",
+    "mobile.launch",
+    "mobile.session.discover",
+    "mobile.session.attach",
+    "open.cycle",
   ]),
   generation: opaqueId.optional(),
   occurredAt: z.string().datetime(),
@@ -138,16 +152,33 @@ export const localRuntimeConfigSchema = z
     organizationId: boundedId,
   })
   .superRefine((runtime, context) => {
-    for (const key of ['serviceUrl', 'collectorUrl', 'collectorScriptUrl', 'platformUrl'] as const) {
+    for (const key of [
+      "serviceUrl",
+      "collectorUrl",
+      "collectorScriptUrl",
+      "platformUrl",
+    ] as const) {
       const url = new URL(runtime[key]);
       if (url.search || url.hash) {
-        context.addIssue({ code: 'custom', path: [key], message: 'Endpoints não aceitam query ou fragment.' });
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Endpoints não aceitam query ou fragment.",
+        });
       }
       if (runtime.localAdapter && !isLoopbackHostname(url.hostname)) {
-        context.addIssue({ code: 'custom', path: [key], message: 'O adapter local aceita somente endpoints de loopback.' });
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "O adapter local aceita somente endpoints de loopback.",
+        });
       }
-      if (!runtime.localAdapter && url.protocol !== 'https:') {
-        context.addIssue({ code: 'custom', path: [key], message: 'Endpoints remotos exigem HTTPS.' });
+      if (!runtime.localAdapter && url.protocol !== "https:") {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Endpoints remotos exigem HTTPS.",
+        });
       }
     }
   });
@@ -187,20 +218,22 @@ export const collectorStopReceiptSchema = z.object({
 export type CollectorStopReceipt = z.infer<typeof collectorStopReceiptSchema>;
 
 export const annotationInputSchema = z.object({
-  kind: z.enum(['element', 'screen']),
+  kind: z.enum(["element", "region", "screen"]),
   note: z.string().trim().min(1).max(1000),
 });
 export type AnnotationInput = z.infer<typeof annotationInputSchema>;
 
 export const capturedSignalCategorySchema = z.enum([
-  'pages',
-  'clicks',
-  'requests',
-  'errors',
-  'notes',
-  'voiceNotes',
+  "pages",
+  "clicks",
+  "requests",
+  "errors",
+  "notes",
+  "voiceNotes",
 ]);
-export type CapturedSignalCategory = z.infer<typeof capturedSignalCategorySchema>;
+export type CapturedSignalCategory = z.infer<
+  typeof capturedSignalCategorySchema
+>;
 
 /**
  * Small, secret-free projection used by the desktop control surface. Raw
@@ -213,7 +246,7 @@ export const capturedSignalSchema = z.object({
   atMs: z.number().int().nonnegative(),
   title: z.string().trim().min(1).max(240),
   detail: z.string().trim().max(1_000).optional(),
-  tone: z.enum(['neutral', 'success', 'warning', 'error']).default('neutral'),
+  tone: z.enum(["neutral", "success", "warning", "error"]).default("neutral"),
 });
 export type CapturedSignal = z.infer<typeof capturedSignalSchema>;
 
@@ -223,11 +256,41 @@ export type CapturedSignal = z.infer<typeof capturedSignalSchema>;
  * renderer receives product context and evidence labels, never storage refs,
  * signed assets, request payloads or authorization material.
  */
-export const desktopLoopApplicationTypeSchema = z.enum(['WEB', 'MOBILE', 'API', 'VOICE']);
-export type DesktopLoopApplicationType = z.infer<typeof desktopLoopApplicationTypeSchema>;
+export const desktopLoopApplicationTypeSchema = z.enum([
+  "WEB",
+  "MOBILE",
+  "API",
+  "VOICE",
+]);
+export type DesktopLoopApplicationType = z.infer<
+  typeof desktopLoopApplicationTypeSchema
+>;
 
 export const desktopLoopCycleStatusSchema = z.string().trim().min(1).max(80);
-export type DesktopLoopCycleStatus = z.infer<typeof desktopLoopCycleStatusSchema>;
+export type DesktopLoopCycleStatus = z.infer<
+  typeof desktopLoopCycleStatusSchema
+>;
+
+export const desktopLoopWorkspaceStateSchema = z.enum([
+  "waiting_for_tests",
+  "collecting",
+  "ready_to_review",
+  "ready_to_resolve",
+  "attention",
+]);
+export type DesktopLoopWorkspaceState = z.infer<
+  typeof desktopLoopWorkspaceStateSchema
+>;
+
+export const desktopLoopParticipantSummarySchema = z.object({
+  id: boundedId,
+  name: z.string().trim().min(1).max(160),
+  role: z.string().trim().min(1).max(120).nullable(),
+  picture: trustedWebUrlSchema.nullable(),
+});
+export type DesktopLoopParticipantSummary = z.infer<
+  typeof desktopLoopParticipantSummarySchema
+>;
 
 export const desktopLoopSummarySchema = z.object({
   id: boundedId,
@@ -239,6 +302,11 @@ export const desktopLoopSummarySchema = z.object({
   status: desktopLoopCycleStatusSchema,
   cycleCount: z.number().int().nonnegative(),
   sessionsRecorded: z.number().int().nonnegative(),
+  workspaceState: desktopLoopWorkspaceStateSchema,
+  testCount: z.number().int().nonnegative(),
+  participantCount: z.number().int().nonnegative(),
+  evidenceCount: z.number().int().nonnegative(),
+  participants: z.array(desktopLoopParticipantSummarySchema).max(100),
   updatedAt: z.string().datetime().nullable(),
   latestCycle: z
     .object({
@@ -267,18 +335,22 @@ export const desktopLoopCycleSummarySchema = z.object({
   updatedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime().nullable(),
 });
-export type DesktopLoopCycleSummary = z.infer<typeof desktopLoopCycleSummarySchema>;
+export type DesktopLoopCycleSummary = z.infer<
+  typeof desktopLoopCycleSummarySchema
+>;
 
 export const desktopLoopEvidenceKindSchema = z.enum([
-  'replay',
-  'annotation',
-  'screenshot',
-  'network',
-  'console',
-  'transcript',
-  'action',
+  "replay",
+  "annotation",
+  "screenshot",
+  "network",
+  "console",
+  "transcript",
+  "action",
 ]);
-export type DesktopLoopEvidenceKind = z.infer<typeof desktopLoopEvidenceKindSchema>;
+export type DesktopLoopEvidenceKind = z.infer<
+  typeof desktopLoopEvidenceKindSchema
+>;
 
 export const desktopLoopEvidenceItemSchema = z.object({
   id: boundedId,
@@ -286,9 +358,11 @@ export const desktopLoopEvidenceItemSchema = z.object({
   atMs: z.number().int().nonnegative().nullable(),
   title: z.string().trim().min(1).max(240),
   detail: z.string().trim().max(1_000).nullable(),
-  tone: z.enum(['neutral', 'success', 'warning', 'error']),
+  tone: z.enum(["neutral", "success", "warning", "error"]),
 });
-export type DesktopLoopEvidenceItem = z.infer<typeof desktopLoopEvidenceItemSchema>;
+export type DesktopLoopEvidenceItem = z.infer<
+  typeof desktopLoopEvidenceItemSchema
+>;
 
 export const desktopLoopCycleDetailSchema = z.object({
   loopId: boundedId,
@@ -305,11 +379,13 @@ export const desktopLoopCycleDetailSchema = z.object({
   }),
   evidence: z.array(desktopLoopEvidenceItemSchema).max(200),
 });
-export type DesktopLoopCycleDetail = z.infer<typeof desktopLoopCycleDetailSchema>;
+export type DesktopLoopCycleDetail = z.infer<
+  typeof desktopLoopCycleDetailSchema
+>;
 
 export const androidDeviceSchema = z.object({
   serial: boundedId,
-  state: z.enum(['device', 'offline', 'unauthorized', 'unknown']),
+  state: z.enum(["device", "offline", "unauthorized", "unknown"]),
   model: z.string().max(120).optional(),
   product: z.string().max(120).optional(),
   transportId: z.string().max(40).optional(),
@@ -352,14 +428,14 @@ export const captureStatusSchema = z.object({
 export type CaptureStatus = z.infer<typeof captureStatusSchema>;
 
 export function createEnvelope(
-  command: CaptureEnvelope['command'],
+  command: CaptureEnvelope["command"],
   payload: Record<string, unknown>,
-  options: Partial<Pick<CaptureEnvelope, 'generation' | 'type'>> = {},
+  options: Partial<Pick<CaptureEnvelope, "generation" | "type">> = {},
 ): CaptureEnvelope {
   return captureEnvelopeSchema.parse({
     version: CAPTURE_HOST_VERSION,
     id: crypto.randomUUID(),
-    type: options.type ?? 'request',
+    type: options.type ?? "request",
     command,
     generation: options.generation,
     occurredAt: new Date().toISOString(),
@@ -370,24 +446,34 @@ export function createEnvelope(
 export function redactUrl(input: string): string {
   try {
     const url = new URL(input);
-    url.username = '';
-    url.password = '';
+    url.username = "";
+    url.password = "";
     for (const key of [...url.searchParams.keys()]) {
-      if (/token|secret|key|authorization|voidr_/i.test(key)) url.searchParams.delete(key);
+      if (/token|secret|password|key|authorization|session|voidr_/i.test(key))
+        url.searchParams.delete(key);
     }
-    if (/^#voidr-loop-v\d+=/i.test(url.hash)) url.hash = '';
+    if (/^#voidr-loop-v\d+=/i.test(url.hash)) url.hash = "";
     return url.toString();
   } catch {
-    return '[invalid-url]';
+    return "[invalid-url]";
   }
 }
 
 export function redactText(input: string): string {
   return input
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]')
-    .replace(/(["']?(?:token|secret|authorization|apiKey)["']?\s*[:=]\s*["'])[^"'\s]{8,}/gi, '$1[redacted]')
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[redacted-token]')
-    .replace(/\b(?:sk|api)[-_][A-Za-z0-9_-]{16,}\b/gi, '[redacted-key]')
-    .replace(/([?&](?:token|key|secret|authorization|voidr_[^=]*)=)[^&#\s]+/gi, '$1[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]")
+    .replace(
+      /(["']?(?:token|secret|authorization|apiKey)["']?\s*[:=]\s*["'])[^"'\s]{8,}/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+      "[redacted-token]",
+    )
+    .replace(/\b(?:sk|api)[-_][A-Za-z0-9_-]{16,}\b/gi, "[redacted-key]")
+    .replace(
+      /([?&](?:token|key|secret|authorization|voidr_[^=]*)=)[^&#\s]+/gi,
+      "$1[redacted]",
+    )
     .slice(0, 4_000);
 }

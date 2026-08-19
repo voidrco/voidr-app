@@ -1,5 +1,7 @@
 # Voidr Capture Desktop
 
+Os contratos de interação e casos de borda estão documentados em [ANNOTATION-FLOW.md](./ANNOTATION-FLOW.md) e [VOICE-FLOW.md](./VOICE-FLOW.md).
+
 O Voidr Capture Desktop é o control plane Electron para captura Web, Mobile e API. O Service continua
 sendo a autoridade de lifecycle e billing, o Collector continua sendo a autoridade da Session e o
 Voidr Platform continua sendo a experiência canônica de replay, comparação, report e Defects.

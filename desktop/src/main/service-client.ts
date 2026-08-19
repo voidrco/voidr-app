@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   desktopCaptureLaunchSchema,
   desktopCaptureResolutionSchema,
@@ -16,11 +16,12 @@ import {
   type DesktopLoopCycleSummary,
   type DesktopLoopEvidenceItem,
   type DesktopLoopSummary,
+  type DesktopLoopWorkspaceState,
   type LocalRuntimeConfig,
   type MobileAttachInput,
   type SafeWebContext,
-} from '@voidr/capture-contracts';
-import { parseDesktopCaptureLaunch, type SecretLoopLaunch } from './deep-link';
+} from "@voidr/capture-contracts";
+import { parseDesktopCaptureLaunch, type SecretLoopLaunch } from "./deep-link";
 
 const validationSchema = z.object({
   valid: z.literal(true),
@@ -54,10 +55,19 @@ const validationSchema = z.object({
         .passthrough()
         .nullish(),
       createdAt: z.string().datetime().optional(),
-      harness: z.object({ name: z.string().optional() }).passthrough().nullish(),
+      harness: z
+        .object({ name: z.string().optional() })
+        .passthrough()
+        .nullish(),
       harnessDelivery: z
         .object({
-          state: z.enum(['waiting', 'preparing', 'available', 'acknowledged', 'failed']),
+          state: z.enum([
+            "waiting",
+            "preparing",
+            "available",
+            "acknowledged",
+            "failed",
+          ]),
         })
         .passthrough()
         .nullish(),
@@ -86,17 +96,32 @@ export interface SecretWebAuthorization {
 
 type Json = Record<string, unknown>;
 const MAX_CONTROL_RESPONSE_BYTES = 2 * 1024 * 1024;
+const VOICE_INGEST_TIMEOUT_MS = 75_000;
+
+export class VoidrApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "VoidrApiError";
+  }
+}
 
 function record(value: unknown): Json {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Json)
+    : {};
 }
 
 function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function stringValue(value: unknown, fallback = '', maxLength = 4_000): string {
-  return typeof value === 'string' ? redactText(value).trim().slice(0, maxLength) : fallback;
+function stringValue(value: unknown, fallback = "", maxLength = 4_000): string {
+  return typeof value === "string"
+    ? redactText(value).trim().slice(0, maxLength)
+    : fallback;
 }
 
 function integerValue(value: unknown): number {
@@ -105,39 +130,64 @@ function integerValue(value: unknown): number {
 }
 
 function isoDate(value: unknown): string | null {
-  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return null;
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value)))
+    return null;
   return new Date(value).toISOString();
 }
 
 function applicationType(value: unknown): DesktopLoopApplicationType {
-  return ['WEB', 'MOBILE', 'API', 'VOICE'].includes(String(value).toUpperCase())
+  return ["WEB", "MOBILE", "API", "VOICE"].includes(String(value).toUpperCase())
     ? (String(value).toUpperCase() as DesktopLoopApplicationType)
-    : 'WEB';
+    : "WEB";
+}
+
+function loopWorkspaceState(value: unknown): DesktopLoopWorkspaceState {
+  const normalized = String(value);
+  if (["recording", "processing", "prepared"].includes(normalized))
+    return "collecting";
+  if (
+    ["ready", "decision_required", "fix_proposed", "awaiting_retest"].includes(
+      normalized,
+    )
+  ) {
+    return "ready_to_review";
+  }
+  if (normalized === "confirmed") return "ready_to_resolve";
+  if (normalized === "failed") return "attention";
+  return [
+    "waiting_for_tests",
+    "collecting",
+    "ready_to_review",
+    "ready_to_resolve",
+    "attention",
+  ].includes(normalized)
+    ? (normalized as DesktopLoopWorkspaceState)
+    : "waiting_for_tests";
 }
 
 function participantName(value: unknown): string | null {
   const participant = record(value);
   return (
-    stringValue(participant.name, '', 160) ||
-    stringValue(participant.email, '', 160) ||
-    stringValue(participant.actorName, '', 160) ||
+    stringValue(participant.name, "", 160) ||
+    stringValue(participant.email, "", 160) ||
+    stringValue(participant.actorName, "", 160) ||
     null
   );
 }
 
 function participantAvatarUrl(value: unknown): string | null {
-  const picture = stringValue(record(value).picture, '', 16_384);
+  const picture = stringValue(record(value).picture, "", 16_384);
   if (!picture) return null;
   try {
     const url = new URL(picture);
-    return ['https:', 'http:'].includes(url.protocol) ? url.toString() : null;
+    return ["https:", "http:"].includes(url.protocol) ? url.toString() : null;
   } catch {
     return null;
   }
 }
 
 function participantRole(value: unknown): string | null {
-  return stringValue(record(value).role, '', 120) || null;
+  return stringValue(record(value).role, "", 120) || null;
 }
 
 function participantIdentity(value: unknown): DesktopCycleParticipant | null {
@@ -150,44 +200,52 @@ function participantIdentity(value: unknown): DesktopCycleParticipant | null {
   };
 }
 
-function evidenceKind(value: unknown): DesktopLoopEvidenceItem['kind'] {
+function evidenceKind(value: unknown): DesktopLoopEvidenceItem["kind"] {
   const kind = String(value).toLowerCase();
-  if (kind === 'recording' || kind === 'replay') return 'replay';
-  if (kind === 'annotation') return 'annotation';
-  if (kind === 'screenshot' || kind === 'frame' || kind === 'crop') return 'screenshot';
-  if (kind === 'network' || kind === 'request') return 'network';
-  if (kind === 'console' || kind === 'console_error') return 'console';
-  if (kind === 'transcript' || kind === 'voice') return 'transcript';
-  return 'action';
+  if (kind === "recording" || kind === "replay") return "replay";
+  if (kind === "annotation") return "annotation";
+  if (kind === "screenshot" || kind === "frame" || kind === "crop")
+    return "screenshot";
+  if (kind === "network" || kind === "request") return "network";
+  if (kind === "console" || kind === "console_error") return "console";
+  if (kind === "transcript" || kind === "voice") return "transcript";
+  return "action";
 }
 
-function evidenceTone(kind: DesktopLoopEvidenceItem['kind'], label: string): DesktopLoopEvidenceItem['tone'] {
-  if (kind === 'console' || /\b(?:4\d\d|5\d\d|fail|error)\b/i.test(label)) return 'error';
-  if (kind === 'annotation' || kind === 'transcript') return 'warning';
-  if (kind === 'replay' || kind === 'screenshot') return 'success';
-  return 'neutral';
+function evidenceTone(
+  kind: DesktopLoopEvidenceItem["kind"],
+  label: string,
+): DesktopLoopEvidenceItem["tone"] {
+  if (kind === "console" || /\b(?:4\d\d|5\d\d|fail|error)\b/i.test(label))
+    return "error";
+  if (kind === "annotation" || kind === "transcript") return "warning";
+  if (kind === "replay" || kind === "screenshot") return "success";
+  return "neutral";
 }
 
 function messageFrom(value: unknown, fallback: string): string {
-  if (!value || typeof value !== 'object') return fallback;
+  if (!value || typeof value !== "object") return fallback;
   const record = value as Record<string, unknown>;
-  if (typeof record.message === 'string') return redactText(record.message);
-  if (typeof record.error === 'string') return redactText(record.error);
-  if (record.error && typeof record.error === 'object') {
+  if (typeof record.message === "string") return redactText(record.message);
+  if (typeof record.error === "string") return redactText(record.error);
+  if (record.error && typeof record.error === "object") {
     const message = (record.error as Record<string, unknown>).message;
-    if (typeof message === 'string') return redactText(message);
+    if (typeof message === "string") return redactText(message);
   }
   return fallback;
 }
 
 async function boundedJson(response: Response): Promise<Json> {
-  const declaredSize = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredSize) && declaredSize > MAX_CONTROL_RESPONSE_BYTES) {
-    throw new Error('A resposta do serviço excedeu o limite permitido.');
+  const declaredSize = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredSize) &&
+    declaredSize > MAX_CONTROL_RESPONSE_BYTES
+  ) {
+    throw new Error("A resposta do serviço excedeu o limite permitido.");
   }
   const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_CONTROL_RESPONSE_BYTES) {
-    throw new Error('A resposta do serviço excedeu o limite permitido.');
+  if (Buffer.byteLength(text, "utf8") > MAX_CONTROL_RESPONSE_BYTES) {
+    throw new Error("A resposta do serviço excedeu o limite permitido.");
   }
   if (!text) return {};
   try {
@@ -204,12 +262,15 @@ async function jsonRequest<T = Json>(
 ): Promise<T> {
   const response = await fetch(url, {
     ...init,
-    redirect: 'error',
+    redirect: "error",
     signal: init.signal ?? AbortSignal.timeout(15_000),
   });
   const payload = await boundedJson(response);
   if (!response.ok) {
-    throw new Error(messageFrom(payload, `Voidr API respondeu HTTP ${response.status}`));
+    throw new VoidrApiError(
+      messageFrom(payload, `Voidr API respondeu HTTP ${response.status}`),
+      response.status,
+    );
   }
   return (unwrap && payload.data !== undefined ? payload.data : payload) as T;
 }
@@ -222,28 +283,56 @@ export class VoidrServiceClient {
   }
 
   async listLoops(): Promise<DesktopLoopSummary[]> {
-    const values = await jsonRequest<unknown[]>(`${this.runtime.serviceUrl}/${this.loopRoot()}`, {
-      headers: this.localHeaders(),
-    });
+    const values = await jsonRequest<unknown[]>(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}`,
+      {
+        headers: this.localHeaders(),
+      },
+    );
     return values.map((value) => {
       const item = record(value);
       const latest = record(item.latestCycle);
+      const workspace = record(item.workspace);
+      const workspaceCounts = record(workspace.counts);
+      const testCounts = record(workspaceCounts.tests);
+      const participants = list(workspace.participants)
+        .slice(0, 100)
+        .map((raw, index) => {
+          const participant = record(raw);
+          return {
+            id: stringValue(participant.id, `participant-${index + 1}`, 200),
+            name: participantName(participant) ?? `Participante ${index + 1}`,
+            role: participantRole(participant),
+            picture: participantAvatarUrl(participant),
+          };
+        });
+      const testCount = integerValue(testCounts.total ?? item.cycle);
       return desktopLoopSummarySchema.parse({
         id: stringValue(item.id),
-        name: stringValue(item.name, 'Loop sem nome', 300),
+        name: stringValue(item.name, "Loop sem nome", 300),
         applicationId: stringValue(item.applicationId),
         applicationType: applicationType(item.applicationType),
         targetUrl: stringValue(item.targetUrl),
-        environment: stringValue(item.environmentSlug ?? item.environment, 'default'),
-        status: stringValue(item.status, 'recording', 80),
-        cycleCount: integerValue(item.cycle),
+        environment: stringValue(
+          item.environmentSlug ?? item.environment,
+          "default",
+        ),
+        status: stringValue(item.status, "recording", 80),
+        cycleCount: testCount,
         sessionsRecorded: integerValue(item.sessionsRecorded),
+        workspaceState: loopWorkspaceState(
+          workspace.state ?? latest.status ?? item.status,
+        ),
+        testCount,
+        participantCount: integerValue(workspaceCounts.participants),
+        evidenceCount: integerValue(workspaceCounts.evidence),
+        participants,
         updatedAt: isoDate(item.updatedAt),
         latestCycle: item.latestCycle
           ? {
               id: stringValue(latest.id),
               number: Math.max(1, integerValue(latest.number)),
-              status: stringValue(latest.status, 'recording', 80),
+              status: stringValue(latest.status, "recording", 80),
               updatedAt: isoDate(latest.updatedAt),
             }
           : null,
@@ -263,9 +352,13 @@ export class VoidrServiceClient {
         id: stringValue(item.cycleId ?? item.verificationId),
         loopId: stringValue(item.loopId, safeLoopId),
         number: Math.max(1, integerValue(item.cycleNumber)),
-        status: stringValue(item.visibleStatus ?? item.status, 'recording', 80),
-        mission: stringValue(item.mission, 'Executar a jornada definida para este Loop', 1_000),
-        environment: stringValue(item.environment, 'default'),
+        status: stringValue(item.visibleStatus ?? item.status, "recording", 80),
+        mission: stringValue(
+          item.mission,
+          "Executar a jornada definida para este Loop",
+          1_000,
+        ),
+        environment: stringValue(item.environment, "default"),
         applicationType: applicationType(item.applicationType),
         participant: participantName(item.participant),
         participantRole: participantRole(item.participant),
@@ -278,7 +371,10 @@ export class VoidrServiceClient {
     });
   }
 
-  async getLoopCycle(loopId: string, cycleId: string): Promise<DesktopLoopCycleDetail> {
+  async getLoopCycle(
+    loopId: string,
+    cycleId: string,
+  ): Promise<DesktopLoopCycleDetail> {
     const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
     const safeCycleId = z.string().uuid().parse(cycleId);
     const value = await jsonRequest<Json>(
@@ -288,32 +384,41 @@ export class VoidrServiceClient {
     );
     const context = record(value.context);
     const counts = record(context.counts);
+    const replayAvailable = record(context.replay).available === true;
     const evidence = list(context.evidence ?? value.evidence)
       .slice(0, 200)
+      .filter((raw) => evidenceKind(record(raw).kind) !== "replay" || replayAvailable)
       .map((raw, index) => {
         const item = record(raw);
         const kind = evidenceKind(item.kind);
-        const title = stringValue(
+        const rawTitle = stringValue(
           item.label,
-          kind === 'replay' ? 'Replay da sessão' : 'Evidência',
+          kind === "replay" ? "Replay do teste" : "Evidência",
           240,
         );
-        const detail = stringValue(item.detail || item.note, '', 1_000) || null;
+        const title =
+          kind === "replay" && /^(?:session replay|replay da sessão)$/i.test(rawTitle)
+            ? "Replay do teste"
+            : rawTitle;
+        const detail = stringValue(item.detail || item.note, "", 1_000) || null;
         return {
           id: `${kind}-${index + 1}`,
           kind,
           atMs: item.atMs == null ? null : integerValue(item.atMs),
           title,
           detail,
-          tone: evidenceTone(kind, `${title} ${detail ?? ''}`),
+          tone: evidenceTone(kind, `${title} ${detail ?? ""}`),
         } satisfies DesktopLoopEvidenceItem;
       });
     return desktopLoopCycleDetailSchema.parse({
       loopId: stringValue(value.loopId, safeLoopId),
       cycleId: stringValue(value.id, safeCycleId),
-      cycleNumber: Math.max(1, integerValue(value.number ?? context.cycleNumber)),
+      cycleNumber: Math.max(
+        1,
+        integerValue(value.number ?? context.cycleNumber),
+      ),
       durationMs: integerValue(context.durationMs),
-      replayAvailable: record(context.replay).available === true,
+      replayAvailable,
       counts: {
         annotations: integerValue(counts.annotations),
         actions: integerValue(counts.actions),
@@ -330,8 +435,8 @@ export class VoidrServiceClient {
     const value = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}/capture`,
       {
-        method: 'POST',
-        headers: { ...this.localHeaders(), 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { ...this.localHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -339,8 +444,11 @@ export class VoidrServiceClient {
   }
 
   async resolveDesktopLaunch(input: unknown): Promise<ResolvedDesktopHandoff> {
-    const launch: DesktopCaptureLaunch = desktopCaptureLaunchSchema.parse(input);
-    const root = this.runtime.localAdapter ? 'loop-test-dev/scenarios' : 'loop-test/scenarios';
+    const launch: DesktopCaptureLaunch =
+      desktopCaptureLaunchSchema.parse(input);
+    const root = this.runtime.localAdapter
+      ? "loop-test-dev/scenarios"
+      : "loop-test/scenarios";
     const value = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/${root}/${encodeURIComponent(launch.loopId)}` +
         `/cycles/${encodeURIComponent(launch.cycleId)}/capture-handoff`,
@@ -356,10 +464,14 @@ export class VoidrServiceClient {
       handoff.cycleId !== launch.cycleId ||
       handoff.surface !== launch.surface
     ) {
-      throw new Error('O Service retornou um handoff diferente do link solicitado.');
+      throw new Error(
+        "O Service retornou um handoff diferente do link solicitado.",
+      );
     }
-    if (handoff.surface === 'web' && !handoff.recordingUrl) {
-      throw new Error('A autorização Web não foi emitida para o Voidr Capture.');
+    if (handoff.surface === "web" && !handoff.recordingUrl) {
+      throw new Error(
+        "A autorização Web não foi emitida para o Voidr Capture.",
+      );
     }
     return handoff;
   }
@@ -371,20 +483,21 @@ export class VoidrServiceClient {
     const value = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/loop-test/scenarios/recording-token/validate`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scenarioId: launch.scenarioId,
           token: launch.token,
           lifecycleGeneration,
-          captureHost: 'voidr_app',
+          captureHost: "voidr_app",
           ...(launch.cycleId ? { cycleId: launch.cycleId } : {}),
         }),
       },
     );
     const validation = validationSchema.parse(value);
     const verification = validation.verification;
-    const cycleId = verification.cycleId ?? launch.cycleId ?? verification.verificationId;
+    const cycleId =
+      verification.cycleId ?? launch.cycleId ?? verification.verificationId;
     return {
       safeContext: {
         scenarioId: validation.scenarioId,
@@ -396,12 +509,18 @@ export class VoidrServiceClient {
         verificationId: verification.verificationId,
         verificationGeneration: verification.generation,
         lifecycleVersion: verification.lifecycleVersion,
-        ...(verification.cycleNumber ? { cycleNumber: verification.cycleNumber } : {}),
+        ...(verification.cycleNumber
+          ? { cycleNumber: verification.cycleNumber }
+          : {}),
         ...(verification.participant
           ? { participant: participantIdentity(verification.participant) }
           : {}),
-        ...(verification.createdAt ? { cycleStartedAt: verification.createdAt } : {}),
-        ...(verification.harness?.name ? { harnessName: verification.harness.name } : {}),
+        ...(verification.createdAt
+          ? { cycleStartedAt: verification.createdAt }
+          : {}),
+        ...(verification.harness?.name
+          ? { harnessName: verification.harness.name }
+          : {}),
         ...(verification.harnessDelivery?.state
           ? { harnessDeliveryState: verification.harnessDelivery.state }
           : {}),
@@ -422,8 +541,8 @@ export class VoidrServiceClient {
     return jsonRequest(
       `${this.runtime.serviceUrl}/loop-test/scenarios/${encodeURIComponent(context.scenarioId)}/sessions`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId,
           token: authorization.attachToken,
@@ -436,23 +555,32 @@ export class VoidrServiceClient {
 
   async verificationIngest(
     authorization: SecretWebAuthorization,
-    endpoint: 'lifecycle-events' | 'annotations' | 'evidence-assets' | 'voice-segments' | 'seal',
+    endpoint:
+      | "lifecycle-events"
+      | "annotations"
+      | "evidence-assets"
+      | "voice-segments"
+      | "seal",
     body: Json,
   ): Promise<Json> {
     const result = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/verification-ingest/verifications/${encodeURIComponent(authorization.safeContext.verificationId)}/${endpoint}`,
       {
-        method: 'POST',
+        method: "POST",
         headers: {
           Authorization: `Bearer ${authorization.verificationToken}`,
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        ...(endpoint === "voice-segments"
+          ? { signal: AbortSignal.timeout(VOICE_INGEST_TIMEOUT_MS) }
+          : {}),
       },
     );
     const lifecycleVersion = Number(
       result.lifecycleVersion ??
-        (result.verification as Record<string, unknown> | undefined)?.lifecycleVersion,
+        (result.verification as Record<string, unknown> | undefined)
+          ?.lifecycleVersion,
     );
     if (Number.isInteger(lifecycleVersion) && lifecycleVersion >= 0) {
       authorization.safeContext.lifecycleVersion = lifecycleVersion;
@@ -469,45 +597,51 @@ export class VoidrServiceClient {
     const init = await jsonRequest<Json>(
       `${this.runtime.collectorUrl}/init`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey: collectorApiKey }),
       },
       false,
     );
     const token =
-      (typeof init.token === 'string' && init.token) ||
-      (typeof (init.data as Json | undefined)?.token === 'string' &&
+      (typeof init.token === "string" && init.token) ||
+      (typeof (init.data as Json | undefined)?.token === "string" &&
         ((init.data as Json).token as string));
-    if (!token) throw new Error('O Collector não emitiu uma autorização de leitura.');
+    if (!token)
+      throw new Error("O Collector não emitiu uma autorização de leitura.");
 
     const deadline = Date.now() + timeoutMs;
-    let lastStatus = 'pending';
+    let lastStatus = "pending";
     while (Date.now() < deadline) {
       const response = await fetch(
         `${this.runtime.collectorUrl}/sessions/${encodeURIComponent(sessionId)}/ensure-indexed`,
         {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({ budgetMs: 1_500 }),
-          redirect: 'error',
+          redirect: "error",
           signal: AbortSignal.timeout(5_000),
         },
       );
       const value = await boundedJson(response);
-      lastStatus = typeof value.status === 'string' ? value.status : lastStatus;
+      lastStatus = typeof value.status === "string" ? value.status : lastStatus;
       const readiness = value.readinessToken as Json | undefined;
-      const indexedThrough = Number(readiness?.indexedThrough ?? value.indexedThrough);
+      const indexedThrough = Number(
+        readiness?.indexedThrough ?? value.indexedThrough,
+      );
       if (
         response.ok &&
-        ['ready', 'indexed'].includes(lastStatus) &&
+        ["ready", "indexed"].includes(lastStatus) &&
         Number.isInteger(indexedThrough) &&
         indexedThrough >= sealedThrough
       ) {
         return indexedThrough;
       }
-      if (response.status === 409 && lastStatus === 'failed') {
-        throw new Error(messageFrom(value, 'A indexação da Session falhou.'));
+      if (response.status === 409 && lastStatus === "failed") {
+        throw new Error(messageFrom(value, "A indexação da Session falhou."));
       }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
@@ -522,9 +656,12 @@ export class VoidrServiceClient {
   }
 
   async listLocalVerifications(): Promise<Json[]> {
-    return jsonRequest<Json[]>(`${this.runtime.serviceUrl}/verification-dev/verifications?limit=50`, {
-      headers: this.localHeaders(),
-    });
+    return jsonRequest<Json[]>(
+      `${this.runtime.serviceUrl}/verification-dev/verifications?limit=50`,
+      {
+        headers: this.localHeaders(),
+      },
+    );
   }
 
   async attachMobileSession(input: unknown): Promise<Json> {
@@ -532,8 +669,8 @@ export class VoidrServiceClient {
     return jsonRequest(
       `${this.runtime.serviceUrl}/verification-dev/verifications/${encodeURIComponent(parsed.verificationId)}/mobile-session`,
       {
-        method: 'POST',
-        headers: { ...this.localHeaders(), 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { ...this.localHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
           lifecycleVersion: parsed.lifecycleVersion,
           idempotencyKey: `desktop-mobile-attach:${parsed.verificationId}:${parsed.sessionId}`,
@@ -544,13 +681,19 @@ export class VoidrServiceClient {
   }
 
   async doctor(): Promise<
-    Array<{ service: string; url: string; ok: boolean; latencyMs: number; detail: string }>
+    Array<{
+      service: string;
+      url: string;
+      ok: boolean;
+      latencyMs: number;
+      detail: string;
+    }>
   > {
     const checks = [
-      ['Service', `${this.runtime.serviceUrl.replace(/\/v1\/?$/, '')}/health`],
-      ['Collector', `${this.runtime.collectorUrl}/health`],
-      ['Collector script', this.runtime.collectorScriptUrl],
-      ['Platform', this.runtime.platformUrl],
+      ["Service", `${this.runtime.serviceUrl.replace(/\/v1\/?$/, "")}/health`],
+      ["Collector", `${this.runtime.collectorUrl}/health`],
+      ["Collector script", this.runtime.collectorScriptUrl],
+      ["Platform", this.runtime.platformUrl],
     ] as const;
     return Promise.all(
       checks.map(async ([service, url]) => {
@@ -558,15 +701,17 @@ export class VoidrServiceClient {
         try {
           const response = await fetch(url, {
             signal: AbortSignal.timeout(4_000),
-            redirect: 'error',
-            cache: 'no-store',
+            redirect: "error",
+            cache: "no-store",
           });
           return {
             service,
             url,
             ok: response.ok,
             latencyMs: Date.now() - started,
-            detail: response.ok ? `HTTP ${response.status}` : `HTTP ${response.status}`,
+            detail: response.ok
+              ? `HTTP ${response.status}`
+              : `HTTP ${response.status}`,
           };
         } catch (error) {
           return {
@@ -574,22 +719,29 @@ export class VoidrServiceClient {
             url,
             ok: false,
             latencyMs: Date.now() - started,
-            detail: error instanceof Error ? redactText(error.message) : 'indisponível',
+            detail:
+              error instanceof Error
+                ? redactText(error.message)
+                : "indisponível",
           };
         }
       }),
     );
   }
 
-  private localHeaders(organizationId = this.runtime.organizationId): Record<string, string> {
+  private localHeaders(
+    organizationId = this.runtime.organizationId,
+  ): Record<string, string> {
     if (!this.runtime.localAdapter) return {};
     return {
-      'x-voidr-dev-key': this.runtime.localDevKey,
-      'x-voidr-organization-id': organizationId,
+      "x-voidr-dev-key": this.runtime.localDevKey,
+      "x-voidr-organization-id": organizationId,
     };
   }
 
   private loopRoot(): string {
-    return this.runtime.localAdapter ? 'loop-test-dev/scenarios' : 'loop-test/scenarios';
+    return this.runtime.localAdapter
+      ? "loop-test-dev/scenarios"
+      : "loop-test/scenarios";
   }
 }

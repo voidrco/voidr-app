@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPTURE_HOST_VERSION,
   VOIDR_CAPTURE_LAUNCH_VERSION,
+  annotationInputSchema,
   captureEnvelopeSchema,
   captureStatusSchema,
   desktopCaptureLaunchSchema,
@@ -15,6 +16,16 @@ import {
 } from './index';
 
 describe('CAPTURE-HOST/1 contracts', () => {
+  it('supports contextual notes for element, region and full-screen capture', () => {
+    for (const kind of ['element', 'region', 'screen'] as const) {
+      expect(annotationInputSchema.parse({ kind, note: 'Esperado × observado' })).toEqual({
+        kind,
+        note: 'Esperado × observado',
+      });
+    }
+    expect(() => annotationInputSchema.parse({ kind: 'region', note: ' ' })).toThrow();
+  });
+
   it('rejects an unknown command and stale protocol', () => {
     expect(() =>
       captureEnvelopeSchema.parse({
@@ -87,6 +98,10 @@ describe('CAPTURE-HOST/1 contracts', () => {
       'abcdefghijklmnop',
     );
     expect(redactUrl('https://admin:secret@example.com/path')).not.toContain('secret');
+    const sessionSafe = redactUrl(
+      'https://example.com/checkout?sessionId=sensitive&password=hunter2&filter=open',
+    );
+    expect(sessionSafe).toBe('https://example.com/checkout?filter=open');
     expect(
       redactText('token="eyJheader123.payload123.signature123" api_key=api_abcdefghijklmnop'),
     ).not.toContain('eyJheader123');

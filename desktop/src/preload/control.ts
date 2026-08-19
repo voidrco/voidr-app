@@ -22,6 +22,11 @@ import {
 } from '@voidr/capture-contracts';
 
 type Unsubscribe = () => void;
+type SelectionEvent = {
+  owner: 'annotation' | 'voice';
+  selectionId?: number;
+  previousSelectionId?: number;
+};
 
 const invokeStatus = (channel: string, input?: unknown): Promise<CaptureStatus> =>
   ipcRenderer.invoke(channel, ...(input === undefined ? [] : [input])).then((value) =>
@@ -32,6 +37,26 @@ const launchAcceptanceSchema = z.object({
   resolution: desktopCaptureResolutionSchema,
   status: captureStatusSchema.optional(),
 });
+
+const automationCaptureApi = process.env.VOIDR_CAPTURE_E2E === '1'
+  ? {
+      sendTargetInputForTest: (input: unknown): Promise<void> =>
+        ipcRenderer.invoke('capture:automation-target-input', input),
+      selectRegionForTest: (rect: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }): Promise<void> => ipcRenderer.invoke('capture:automation-select-region', rect),
+      injectVoiceDraftForTest: (input: { pcmBase64: string }): Promise<void> =>
+        ipcRenderer.invoke('capture:automation-voice-draft', input),
+      onVoiceDraftForTest: (callback: (input: { pcmBase64: string }) => void): Unsubscribe => {
+        const listener = (_event: Electron.IpcRendererEvent, input: { pcmBase64: string }) => callback(input);
+        ipcRenderer.on('capture:automation-voice-draft-received', listener);
+        return () => ipcRenderer.removeListener('capture:automation-voice-draft-received', listener);
+      },
+    }
+  : {};
 
 export interface CaptureLaunchAcceptance {
   resolution: DesktopCaptureResolution;
@@ -59,20 +84,32 @@ const api = {
     reset: (): Promise<CaptureStatus> => invokeStatus('capture:reset'),
     selectElement: (): Promise<{ selected: true }> =>
       ipcRenderer.invoke('capture:select-element'),
-    clearElementSelection: (): Promise<void> =>
-      ipcRenderer.invoke('capture:clear-element-selection'),
-    annotate: (input: { kind: 'element' | 'screen'; note: string }) =>
+    selectRegion: (): Promise<{ selected: true }> =>
+      ipcRenderer.invoke('capture:select-region'),
+    selectVoiceRegion: (selectionId: number): Promise<{ selected: true }> =>
+      ipcRenderer.invoke('capture:select-voice-region', selectionId),
+    clearVoiceRegion: (): Promise<void> =>
+      ipcRenderer.invoke('capture:clear-voice-region'),
+    clearSelection: (): Promise<void> =>
+      ipcRenderer.invoke('capture:clear-selection'),
+    cancelSelection: (): Promise<void> =>
+      ipcRenderer.invoke('capture:cancel-selection'),
+    annotate: (input: { kind: 'element' | 'region' | 'screen'; note: string }) =>
       ipcRenderer.invoke('capture:annotate', input),
     voiceSegment: (input: {
+      segmentId: string;
       startedAtMs: number;
       endedAtMs: number;
       pcmBase64: string;
       language?: string;
-    }): Promise<{ transcript: string }> => ipcRenderer.invoke('capture:voice-segment', input),
+      expectsVisual: boolean;
+      visualSelectionId?: number;
+    }): Promise<{ transcript: string; segmentId: string }> => ipcRenderer.invoke('capture:voice-segment', input),
     setControlPanel: (
-      mode: 'default' | 'annotation' | 'annotation-composer' | 'evidence' | 'finalizing',
+      mode: 'default' | 'annotation' | 'annotation-composer' | 'evidence' | 'voice' | 'finalizing',
     ): Promise<{ x: number; y: number; width: number; height: number } | undefined> =>
       ipcRenderer.invoke('capture:set-control-panel', mode),
+    ...automationCaptureApi,
     onStatus: (callback: (status: CaptureStatus) => void): Unsubscribe => {
       const listener = (_event: Electron.IpcRendererEvent, status: CaptureStatus) => {
         const parsed = captureStatusSchema.safeParse(status);
@@ -80,6 +117,21 @@ const api = {
       };
       ipcRenderer.on('capture:status-changed', listener);
       return () => ipcRenderer.removeListener('capture:status-changed', listener);
+    },
+    onTargetPointerDown: (callback: () => void): Unsubscribe => {
+      const listener = () => callback();
+      ipcRenderer.on('capture:target-pointer-down', listener);
+      return () => ipcRenderer.removeListener('capture:target-pointer-down', listener);
+    },
+    onSelectionInvalidated: (callback: (input: SelectionEvent) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, input: SelectionEvent) => callback(input);
+      ipcRenderer.on('capture:selection-invalidated', listener);
+      return () => ipcRenderer.removeListener('capture:selection-invalidated', listener);
+    },
+    onSelectionCancelled: (callback: (input: SelectionEvent) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, input: SelectionEvent) => callback(input);
+      ipcRenderer.on('capture:selection-cancelled', listener);
+      return () => ipcRenderer.removeListener('capture:selection-cancelled', listener);
     },
     onLaunch: (callback: (launch: DesktopCaptureLaunch) => void): Unsubscribe => {
       const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {

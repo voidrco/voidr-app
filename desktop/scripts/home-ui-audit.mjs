@@ -2,13 +2,15 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(directory, '..');
 const screenshotPath = process.env.VOIDR_HOME_AUDIT_SCREENSHOT ?? '/tmp/voidr-desktop-home.png';
 const debuggingPort = Number(process.env.VOIDR_HOME_AUDIT_PORT ?? 9341);
 const electronBinary = createRequire(import.meta.url)('electron');
+const auditUserDataDirectory = await mkdtemp(resolve(tmpdir(), 'voidr-home-audit-'));
 
 const delay = (milliseconds) =>
   new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
@@ -75,7 +77,11 @@ class DevToolsClient {
 
 const child = spawn(
   electronBinary,
-  [`--remote-debugging-port=${debuggingPort}`, desktopDirectory],
+  [
+    `--remote-debugging-port=${debuggingPort}`,
+    `--user-data-dir=${auditUserDataDirectory}`,
+    desktopDirectory,
+  ],
   {
     cwd: desktopDirectory,
     env: { ...process.env, VOIDR_CAPTURE_E2E: '1', CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
@@ -97,7 +103,9 @@ try {
       const rows=[...document.querySelectorAll('.workspace-loop-row')];
       const selected=document.querySelector('.workspace-loop-row.active');
       const cycleRows=[...document.querySelectorAll('.workspace-cycle-row')];
+      const selectedTest=document.querySelector('.workspace-cycle-row.active');
       const evidenceRows=[...document.querySelectorAll('.workspace-evidence-list article')];
+      const technical=document.querySelector('.workspace-technical-signals');
       if(!home||!selected||!cycleRows.length) return null;
       const rect=home.getBoundingClientRect();
       const labels=[...document.querySelectorAll('button')]
@@ -107,21 +115,33 @@ try {
         viewport:{width:innerWidth,height:innerHeight},
         home:{width:Math.round(rect.width),height:Math.round(rect.height)},
         loops:rows.length,
-        cycles:cycleRows.length,
+        tests:cycleRows.length,
         evidence:evidenceRows.length,
+        selectedTest:selectedTest?.textContent?.replace(/\\s+/g,' ').trim(),
+        replayVisible:Boolean(
+          [...document.querySelectorAll('.workspace-evidence-list article strong')]
+            .find((element)=>element.textContent?.trim()==='Replay do teste')
+        ),
         selectedLoop:selected.textContent?.replace(/\\s+/g,' ').trim(),
-        actions:labels.filter((label)=>['Iniciar meu ciclo','Revisar na Web','Atualizar'].includes(label)),
+        actions:labels.filter((label)=>['Fazer meu teste','Abrir teste','Revisar teste'].includes(label)),
+        technicalSignalsCollapsed:Boolean(technical&&!technical.hasAttribute('open')),
+        duplicateWorkspaceHeading:Boolean(document.querySelector('.workspace-heading')),
         horizontalOverflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,
-        internalCopy:/\\b(?:VAP|Mongo|ClickHouse|object storage|signed URL|harnessDelivery)\\b/i.test(document.body.innerText),
+        internalCopy:/\\b(?:VAP|Mongo|ClickHouse|object storage|signed URL|harnessDelivery|Cycle|Ciclo)\\b/i.test(document.body.innerText),
       };
     })()`);
-    return value?.evidence ? value : undefined;
+    return value?.tests ? value : undefined;
   });
   const screenshot = await client.call('Page.captureScreenshot', { format: 'png' });
   await writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'));
   if (audit.horizontalOverflow) throw new Error('A Home criou overflow horizontal global.');
   if (audit.internalCopy) throw new Error('A Home expôs copy interna de implementação.');
-  if (!audit.actions.includes('Iniciar meu ciclo')) throw new Error('A ação primária não está visível.');
+  if (audit.selectedTest?.includes('Em teste') && audit.replayVisible) {
+    throw new Error('A Home afirmou que existe replay antes da captura terminar.');
+  }
+  if (audit.duplicateWorkspaceHeading) throw new Error('A Home repetiu o título da área de trabalho.');
+  if (!audit.technicalSignalsCollapsed) throw new Error('Sinais técnicos competem com o feedback principal.');
+  if (!audit.actions.includes('Fazer meu teste')) throw new Error('A ação primária não está visível.');
   process.stdout.write(`${JSON.stringify({ ok: true, screenshotPath, ...audit }, null, 2)}\n`);
 } finally {
   client?.close();
@@ -130,4 +150,5 @@ try {
     new Promise((resolvePromise) => child.once('exit', resolvePromise)),
     delay(2_000),
   ]);
+  await rm(auditUserDataDirectory, { recursive: true, force: true });
 }

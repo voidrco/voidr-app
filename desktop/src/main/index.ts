@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, ipcMain, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, session, shell } from 'electron';
 import { z } from 'zod';
 import {
   androidLaunchInputSchema,
@@ -12,11 +12,7 @@ import {
   type DesktopCaptureLaunch,
 } from '@voidr/capture-contracts';
 import { annotationInputSchema } from '@voidr/capture-contracts';
-import {
-  discoverAndroidSessions,
-  doctorAndroid,
-  launchAndroid,
-} from './android-adapter';
+import { discoverAndroidSessions, doctorAndroid, launchAndroid } from './android-adapter';
 import { CaptureLedger } from './ledger';
 import { CONTROL_ORIGIN, CONTROL_SCHEME, isControlRendererUrl, resolveControlAsset } from './app-protocol';
 import { VoidrServiceClient } from './service-client';
@@ -33,6 +29,7 @@ const controlPanelModeSchema = z.enum([
   'annotation',
   'annotation-composer',
   'evidence',
+  'voice',
   'finalizing',
 ]);
 type ControlPanelMode = z.infer<typeof controlPanelModeSchema>;
@@ -41,6 +38,7 @@ const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
   annotation: 196,
   'annotation-composer': 286,
   evidence: 270,
+  voice: 354,
   finalizing: 174,
 };
 
@@ -48,7 +46,12 @@ let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
 let mainWindowCreation: Promise<void> | undefined;
+let launchAcceptanceFlight: Promise<unknown> | undefined;
+let launchAcceptanceKey: string | undefined;
 let controlPanelMode: ControlPanelMode = 'default';
+let appIsQuitting = false;
+let selectionEscapeGuards = 0;
+let selectionEscapeRegistered = false;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -72,11 +75,23 @@ const verificationIdInputSchema = z.object({
   verificationId: z.string().uuid(),
 });
 const voiceInputSchema = z.object({
+  segmentId: z.string().uuid(),
   startedAtMs: z.number().int().nonnegative(),
   endedAtMs: z.number().int().positive(),
   pcmBase64: z.string().min(428).max(5_200_000),
   language: z.string().min(2).max(16).optional(),
+  expectsVisual: z.boolean(),
+  visualSelectionId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+}).superRefine((input, context) => {
+  if (input.expectsVisual !== (input.visualSelectionId !== undefined)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['visualSelectionId'],
+      message: 'A seleção visual da voz está inconsistente.',
+    });
+  }
 });
+const voiceSelectionIdSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const acceptLaunchSchema = z.object({
   launch: desktopCaptureLaunchSchema,
   runtime: localRuntimeConfigSchema,
@@ -87,6 +102,28 @@ const workspaceLoopInputSchema = z.object({
 });
 const workspaceCycleInputSchema = workspaceLoopInputSchema.extend({
   cycleId: z.string().uuid(),
+});
+const automationTargetInputSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.enum(['keyDown', 'keyUp']),
+    keyCode: z.string().min(1).max(40),
+  }),
+  z.object({
+    type: z.enum(['mouseMove', 'mouseDown', 'mouseUp']),
+    x: z.number().finite(),
+    y: z.number().finite(),
+    button: z.enum(['left', 'middle', 'right']).optional(),
+    clickCount: z.number().int().min(0).max(3).optional(),
+  }),
+]);
+const automationRegionSchema = z.object({
+  x: z.number().finite().nonnegative(),
+  y: z.number().finite().nonnegative(),
+  width: z.number().finite().positive(),
+  height: z.number().finite().positive(),
+});
+const automationVoiceDraftSchema = z.object({
+  pcmBase64: z.string().min(19_200).max(160_000),
 });
 
 function protocolUrlFromArgv(argv: readonly string[]): string | undefined {
@@ -109,6 +146,49 @@ function revealMainWindow(): void {
   if (process.platform === 'darwin') app.focus({ steal: true });
   mainWindow.focus();
   mainWindow.moveTop();
+}
+
+function isEscapeInput(input: Electron.Input): boolean {
+  const nativeInput = input as Electron.Input & { keyCode?: string | number };
+  return (
+    input.key === 'Escape' ||
+    input.key === 'Esc' ||
+    input.key === '\u001b' ||
+    input.code === 'Escape' ||
+    nativeInput.keyCode === 'Escape' ||
+    nativeInput.keyCode === 27
+  );
+}
+
+function isKeyDownInput(input: Electron.Input): boolean {
+  return input.type !== 'keyUp';
+}
+
+async function withNativeSelectionEscape<T>(select: () => Promise<T>): Promise<T> {
+  selectionEscapeGuards += 1;
+  if (selectionEscapeGuards === 1) {
+    selectionEscapeRegistered = globalShortcut.register('Escape', () => {
+      void webCapture?.cancelSelection();
+    });
+  }
+  try {
+    return await select();
+  } finally {
+    selectionEscapeGuards = Math.max(0, selectionEscapeGuards - 1);
+    if (selectionEscapeGuards === 0 && selectionEscapeRegistered) {
+      globalShortcut.unregister('Escape');
+      selectionEscapeRegistered = false;
+    }
+  }
+}
+
+function shouldKeepCaptureAliveOnClose(): boolean {
+  return Boolean(
+    webCapture &&
+    ['recording', 'stopping', 'sealed', 'attaching', 'processing', 'recoverable_error'].includes(
+      webCapture.status.stage,
+    ),
+  );
 }
 
 async function ensureMainWindow(): Promise<void> {
@@ -179,21 +259,56 @@ function registerIpc(): void {
   ipcMain.handle('capture:accept-launch', async (event, input) => {
     assertControlSender(event);
     const parsed = acceptLaunchSchema.parse(input);
-    const client = new VoidrServiceClient(parsed.runtime);
-    const handoff = await client.resolveDesktopLaunch(parsed.launch);
-    const { recordingUrl, recordingExpiresAt: _recordingExpiresAt, ...resolution } = handoff;
-    let status = webCapture?.status;
-    if (handoff.surface === 'web') {
-      status = await webCapture!.prepare({ recordingUrl, runtime: parsed.runtime });
-      if (status.stage === 'ready') status = await webCapture!.start();
+    const key = `${parsed.launch.loopId}:${parsed.launch.cycleId}`;
+    if (launchAcceptanceFlight) {
+      if (launchAcceptanceKey === key) return launchAcceptanceFlight;
+      throw new Error('Outro teste já está sendo preparado. Aguarde a abertura terminar.');
     }
+    const current = webCapture?.status;
     if (
-      pendingLaunch?.loopId === parsed.launch.loopId &&
-      pendingLaunch.cycleId === parsed.launch.cycleId
+      current &&
+      ['recording', 'stopping', 'sealed', 'attaching', 'processing', 'recoverable_error'].includes(
+        current.stage,
+      )
     ) {
-      pendingLaunch = undefined;
+      const sameCycle = current.context?.scenarioId === parsed.launch.loopId &&
+        current.context?.cycleId === parsed.launch.cycleId;
+      throw new Error(
+        sameCycle
+          ? 'Este teste já está em andamento. Continue a captura atual.'
+          : 'Conclua o teste atual antes de abrir outro convite.',
+      );
     }
-    return { resolution, status };
+    launchAcceptanceKey = key;
+    const flight = (async () => {
+      const client = new VoidrServiceClient(parsed.runtime);
+      const handoff = await client.resolveDesktopLaunch(parsed.launch);
+      const { recordingUrl, recordingExpiresAt: _recordingExpiresAt, ...resolution } = handoff;
+      let status = webCapture?.status;
+      if (handoff.surface === 'web') {
+        status = await webCapture!.prepare({
+          recordingUrl,
+          runtime: parsed.runtime,
+        });
+        if (status.stage === 'ready') status = await webCapture!.start();
+      }
+      if (
+        pendingLaunch?.loopId === parsed.launch.loopId &&
+        pendingLaunch.cycleId === parsed.launch.cycleId
+      ) {
+        pendingLaunch = undefined;
+      }
+      return { resolution, status };
+    })();
+    launchAcceptanceFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (launchAcceptanceFlight === flight) {
+        launchAcceptanceFlight = undefined;
+        launchAcceptanceKey = undefined;
+      }
+    }
   });
   ipcMain.handle('capture:prepare-web', async (event, input) => {
     assertControlSender(event);
@@ -218,11 +333,28 @@ function registerIpc(): void {
   });
   ipcMain.handle('capture:select-element', async (event) => {
     assertControlSender(event);
-    return webCapture!.selectElement();
+    return withNativeSelectionEscape(() => webCapture!.selectElement());
   });
-  ipcMain.handle('capture:clear-element-selection', async (event) => {
+  ipcMain.handle('capture:select-region', async (event) => {
     assertControlSender(event);
-    await webCapture!.clearElementSelection();
+    return withNativeSelectionEscape(() => webCapture!.selectRegion());
+  });
+  ipcMain.handle('capture:select-voice-region', async (event, input) => {
+    assertControlSender(event);
+    const selectionId = voiceSelectionIdSchema.parse(input);
+    return withNativeSelectionEscape(() => webCapture!.selectVoiceRegion(selectionId));
+  });
+  ipcMain.handle('capture:clear-voice-region', async (event) => {
+    assertControlSender(event);
+    await webCapture!.clearVoiceRegion();
+  });
+  ipcMain.handle('capture:clear-selection', async (event) => {
+    assertControlSender(event);
+    await webCapture!.clearSelection();
+  });
+  ipcMain.handle('capture:cancel-selection', async (event) => {
+    assertControlSender(event);
+    await webCapture!.cancelSelection();
   });
   ipcMain.handle('capture:voice-segment', async (event, input) => {
     assertControlSender(event);
@@ -233,6 +365,23 @@ function registerIpc(): void {
     controlPanelMode = controlPanelModeSchema.parse(input);
     return webCapture?.resize();
   });
+  if (isAutomation) {
+    ipcMain.handle('capture:automation-target-input', (event, input) => {
+      assertControlSender(event);
+      webCapture!.sendInputForAutomation(
+        automationTargetInputSchema.parse(input) as Electron.MouseInputEvent | Electron.KeyboardInputEvent,
+      );
+    });
+    ipcMain.handle('capture:automation-select-region', async (event, input) => {
+      assertControlSender(event);
+      await webCapture!.completeRegionSelectionForAutomation(automationRegionSchema.parse(input));
+    });
+    ipcMain.handle('capture:automation-voice-draft', (event, input) => {
+      assertControlSender(event);
+      const draft = automationVoiceDraftSchema.parse(input);
+      mainWindow!.webContents.send('capture:automation-voice-draft-received', draft);
+    });
+  }
   ipcMain.handle('capture:doctor', async (event, runtime) => {
     assertControlSender(event);
     const parsed = localRuntimeConfigSchema.parse(runtime);
@@ -314,8 +463,7 @@ function hardenSession(targetSession: Electron.Session): void {
         ? (details.mediaTypes as Array<'audio' | 'video'> | undefined)
         : undefined;
     const isAudioOnly =
-      permission === 'media' &&
-      (!mediaTypes || (mediaTypes.includes('audio') && !mediaTypes.includes('video')));
+      permission === 'media' && (!mediaTypes || (mediaTypes.includes('audio') && !mediaTypes.includes('video')));
     callback(isControlRenderer && isControlOrigin && isAudioOnly);
   });
   targetSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
@@ -370,8 +518,28 @@ async function createWindow(): Promise<void> {
       }
     },
     targetBounds,
+    () => {
+      if (controlPanelMode === 'annotation' && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('capture:target-pointer-down');
+      }
+    },
+    (selection) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('capture:selection-invalidated', selection);
+      }
+    },
+    (selection) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('capture:selection-cancelled', selection);
+      }
+    },
   );
   mainWindow.on('resize', () => webCapture?.resize());
+  mainWindow.on('close', (event) => {
+    if (appIsQuitting || !shouldKeepCaptureAliveOnClose()) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
   mainWindow.on('closed', () => {
     void webCapture?.disposeTarget();
     mainWindow = undefined;
@@ -383,6 +551,12 @@ async function createWindow(): Promise<void> {
     if (!allowed) event.preventDefault();
   });
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (webCapture?.selectionActive && isKeyDownInput(input) && isEscapeInput(input)) {
+      event.preventDefault();
+      void webCapture.cancelSelection();
+    }
+  });
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.webContents.on('did-finish-load', publishPendingLaunch);
   if (isDevelopment) {
@@ -432,6 +606,13 @@ if (!lock) {
     app.on('activate', () => {
       scheduleMainWindow();
     });
+  });
+  app.on('before-quit', () => {
+    appIsQuitting = true;
+    if (selectionEscapeRegistered) {
+      globalShortcut.unregister('Escape');
+      selectionEscapeRegistered = false;
+    }
   });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
