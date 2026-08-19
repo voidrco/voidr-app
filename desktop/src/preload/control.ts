@@ -185,6 +185,8 @@ const api = {
     platformUrl: string;
     loopId: string;
     cycleId: string;
+    destination?: 'cycle' | 'consolidated';
+    agent?: 'codex' | 'cursor' | 'claude_code';
   }): Promise<void> => ipcRenderer.invoke('capture:open-cycle', input),
 };
 

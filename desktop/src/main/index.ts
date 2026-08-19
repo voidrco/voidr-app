@@ -2,10 +2,10 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, session, shell } from 'electron';
 import { z } from 'zod';
+import { buildLoopCodeHandoffUrl, loopCodeHandoffInputSchema } from './code-handoff';
 import {
   androidLaunchInputSchema,
   desktopCaptureLaunchSchema,
-  isTrustedWebUrl,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
   prepareWebInputSchema,
@@ -65,11 +65,7 @@ if (app.isPackaged) {
   app.commandLine.removeSwitch('remote-debugging-pipe');
 }
 
-const openCycleSchema = z.object({
-  platformUrl: z.string().url(),
-  loopId: z.string().trim().min(1).max(200),
-  cycleId: z.string().uuid(),
-});
+const openCycleSchema = loopCodeHandoffInputSchema;
 const verificationIdInputSchema = z.object({
   runtime: localRuntimeConfigSchema,
   verificationId: z.string().uuid(),
@@ -437,15 +433,7 @@ function registerIpc(): void {
   ipcMain.handle('capture:open-cycle', async (event, input) => {
     assertControlSender(event);
     const parsed = openCycleSchema.parse(input);
-    const base = new URL(parsed.platformUrl);
-    if (!isTrustedWebUrl(base.toString()) || base.username || base.password) {
-      throw new Error('Platform URL inválida.');
-    }
-    const destination = new URL(
-      `/loops/${encodeURIComponent(parsed.loopId)}/cycles/${encodeURIComponent(parsed.cycleId)}`,
-      base,
-    );
-    await shell.openExternal(destination.toString());
+    await shell.openExternal(buildLoopCodeHandoffUrl(parsed));
   });
 }
 

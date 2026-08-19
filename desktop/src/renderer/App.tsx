@@ -1100,7 +1100,28 @@ function App() {
     if (protectVoicePending('finalizar o teste')) return;
     await run(async () => {
       await cancelAnnotation('closed');
-      await window.voidrCapture.capture.stopWeb();
+      const completed = await window.voidrCapture.capture.stopWeb();
+      if (
+        ['processing', 'ready_for_review'].includes(completed.stage) &&
+        completed.context?.scenarioId &&
+        completed.context?.cycleId
+      ) {
+        try {
+          await window.voidrCapture.openCycle({
+            platformUrl: runtime.platformUrl,
+            loopId: completed.context.scenarioId,
+            cycleId: completed.context.cycleId,
+            destination: 'consolidated',
+            agent: 'codex',
+          });
+        } catch {
+          setFeedback({
+            tone: 'warning',
+            title: 'Captura concluída',
+            message: 'As evidências foram salvas, mas a plataforma não abriu automaticamente. Use “Consolidar e resolver” para continuar.',
+          });
+        }
+      }
     });
   };
 
@@ -1371,7 +1392,7 @@ function App() {
             {recording && <Button size="sm" variant={voiceFlow.phase === 'recording' ? 'danger' : 'secondary'} icon={voiceFlow.phase === 'recording' ? <Square size={12} /> : <Mic size={13} />} disabled={busy || ['requesting', 'stopping', 'sending'].includes(voiceFlow.phase)} onClick={() => void toggleVoiceWithAnnotationCleanup()}>{voiceFlow.phase === 'recording' ? 'Parar' : 'Voz'}</Button>}
             {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy} onClick={() => void finalizeCapture()}>Finalizar</Button>}
             {status.stage === 'recoverable_error' && <Button size="sm" variant="primary" icon={<RefreshCw size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Tentar novamente</Button>}
-            {['processing', 'ready_for_review'].includes(status.stage) && status.context && <Button size="sm" variant="primary" icon={<ExternalLink size={13} />} onClick={() => void window.voidrCapture.openCycle({ platformUrl: runtime.platformUrl, loopId: status.context!.scenarioId, cycleId: status.context!.cycleId })}>Revisar na Voidr</Button>}
+            {['processing', 'ready_for_review'].includes(status.stage) && status.context && <Button size="sm" variant="primary" icon={<ExternalLink size={13} />} onClick={() => void window.voidrCapture.openCycle({ platformUrl: runtime.platformUrl, loopId: status.context!.scenarioId, cycleId: status.context!.cycleId, destination: 'consolidated', agent: 'codex' })}>Consolidar e resolver</Button>}
             {status.stage === 'ready_for_review' && <Button size="sm" variant="ghost" icon={<RotateCcw size={13} />} onClick={() => run(async () => { await window.voidrCapture.capture.reset(); })}>Nova captura</Button>}
           </div>
           {noteOpen && recording && (
