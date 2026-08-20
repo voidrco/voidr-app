@@ -16,6 +16,7 @@ import { discoverAndroidSessions, doctorAndroid, launchAndroid } from './android
 import { CaptureLedger } from './ledger';
 import { CONTROL_ORIGIN, CONTROL_SCHEME, isControlRendererUrl, resolveControlAsset } from './app-protocol';
 import { VoidrServiceClient } from './service-client';
+import { LoopParticipantAuthSession } from './loop-participant-auth';
 import { WebCaptureController } from './web-capture-controller';
 import { parseDesktopCaptureLaunch } from './deep-link';
 
@@ -47,6 +48,7 @@ let webCapture: WebCaptureController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
 let mainWindowCreation: Promise<void> | undefined;
 let launchAcceptanceFlight: Promise<unknown> | undefined;
+const loopParticipantAuth = new LoopParticipantAuthSession();
 let launchAcceptanceKey: string | undefined;
 let controlPanelMode: ControlPanelMode = 'default';
 let appIsQuitting = false;
@@ -278,7 +280,13 @@ function registerIpc(): void {
     launchAcceptanceKey = key;
     const flight = (async () => {
       const client = new VoidrServiceClient(parsed.runtime);
-      const handoff = await client.resolveDesktopLaunch(parsed.launch);
+      const remoteToken = parsed.runtime.localAdapter
+        ? undefined
+        : await loopParticipantAuth.accessToken(parsed.launch.access);
+      const handoff = await client.resolveDesktopLaunch(
+        parsed.launch,
+        remoteToken,
+      );
       const { recordingUrl, recordingExpiresAt: _recordingExpiresAt, ...resolution } = handoff;
       let status = webCapture?.status;
       if (handoff.surface === 'web') {

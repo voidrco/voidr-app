@@ -17,9 +17,15 @@ describe("VoidrServiceClient", () => {
   it("allows voice transcription to outlive the default control request timeout", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true, data: { segment: { text: "pronto" } } }), {
-        status: 200,
-      }),
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { segment: { text: "pronto" } },
+        }),
+        {
+          status: 200,
+        },
+      ),
     );
     const authorization = {
       verificationToken: "verification-capability",
@@ -231,7 +237,10 @@ describe("VoidrServiceClient", () => {
       counts: { failedRequests: 1 },
       evidence: [
         expect.objectContaining({ kind: "replay", title: "Replay do teste" }),
-        expect.objectContaining({ kind: "annotation", title: "Botão não respondeu" }),
+        expect.objectContaining({
+          kind: "annotation",
+          title: "Botão não respondeu",
+        }),
       ],
     });
     expect(JSON.stringify({ loops, cycles, detail })).not.toMatch(
@@ -271,6 +280,117 @@ describe("VoidrServiceClient", () => {
     );
   });
 
+  it("uses the participant audience only for a participant-marked desktop handoff", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            version: "VOIDR-CAPTURE-LAUNCH/1",
+            captureAdapter: "voidr_app",
+            surface: "api",
+            loopId: "lts_public",
+            cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+            cycleNumber: 1,
+            applicationId: "app_public",
+            environment: "staging",
+            mission: "Validar API",
+            targetUrl: "https://api.example.test",
+            participant: {
+              name: "Ana Silva",
+              role: "Participante externo",
+              picture: null,
+            },
+            cycleStartedAt: "2026-08-20T12:00:00.000Z",
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const remoteRuntime = {
+      ...runtime,
+      serviceUrl: "https://api.example.test/v1",
+      collectorUrl: "https://collector.example.test",
+      collectorScriptUrl: "https://cdn.example.test/recorder.min.js",
+      platformUrl: "https://platform.example.test",
+      localAdapter: false,
+    };
+    await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
+      {
+        version: "VOIDR-CAPTURE-LAUNCH/1",
+        organizationId: "org_hidden",
+        loopId: "lts_public",
+        cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+        surface: "api",
+        access: "participant",
+      },
+      "participant-access-token",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/loop-participant/captures/lts_public/88ad0919-9754-4787-8a43-fc4bf79e52bd",
+      ),
+      expect.objectContaining({
+        headers: { Authorization: "Bearer participant-access-token" },
+      }),
+    );
+  });
+
+  it("authenticates an organization handoff against the production Loop API", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            version: "VOIDR-CAPTURE-LAUNCH/1",
+            captureAdapter: "voidr_app",
+            surface: "web",
+            loopId: "lts_production",
+            cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+            cycleNumber: 1,
+            applicationId: "app_production",
+            environment: "production",
+            mission: "Validar o fluxo",
+            targetUrl: "https://example.test",
+            participant: null,
+            cycleStartedAt: "2026-08-20T12:00:00.000Z",
+            recordingUrl: "https://example.test/?voidr_record=1",
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const remoteRuntime = {
+      ...runtime,
+      serviceUrl: "https://api.voidr.co/v1",
+      collectorUrl: "https://collector.voidr.co",
+      collectorScriptUrl:
+        "https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js",
+      platformUrl: "https://platform.voidr.co",
+      localAdapter: false,
+    };
+
+    await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
+      {
+        version: "VOIDR-CAPTURE-LAUNCH/1",
+        organizationId: "org_production",
+        loopId: "lts_production",
+        cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+        surface: "web",
+        access: "organization",
+        deployment: "production",
+      },
+      "organization-access-token",
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.voidr.co/v1/loop-test/scenarios/lts_production/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd/capture-handoff",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer organization-access-token" },
+      }),
+    );
+  });
+
   it("does not present a replay before the recording is actually available", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -302,7 +422,10 @@ describe("VoidrServiceClient", () => {
 
     expect(detail.replayAvailable).toBe(false);
     expect(detail.evidence).toEqual([
-      expect.objectContaining({ kind: "annotation", title: "Campo sem instrução" }),
+      expect.objectContaining({
+        kind: "annotation",
+        title: "Campo sem instrução",
+      }),
     ]);
   });
 

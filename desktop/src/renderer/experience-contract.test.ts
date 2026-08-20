@@ -139,8 +139,9 @@ describe("desktop experience contract", () => {
     expect(appSource).not.toContain("JSON.stringify(runtime));");
   });
 
-  it("keeps the workspace scoped to the organization carried by a local launch", () => {
-    expect(appSource).toContain("organizationId: launch.organizationId");
+  it("keeps the workspace scoped to the deployment and organization carried by a launch", () => {
+    expect(appSource).toContain("runtimeForDeployment(");
+    expect(appSource).toContain("launch.organizationId");
     expect(appSource).toContain("capture.acceptLaunch(launch, launchRuntime)");
     expect(appSource).toContain("setRuntime(launchRuntime)");
   });

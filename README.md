@@ -22,6 +22,19 @@ npm test
 npm run dev
 ```
 
+Convites externos usam o mesmo tenant Auth0, mas um Native Application e um
+audience exclusivos. Para exercitar esse fluxo no desktop, configure no processo
+main (client id é público; nunca inclua client secret):
+
+```bash
+VOIDR_PARTICIPANT_AUTH_DOMAIN=tenant.auth0.com
+VOIDR_PARTICIPANT_AUTH_CLIENT_ID=native-public-client-id
+VOIDR_PARTICIPANT_AUTH_AUDIENCE=https://api.voidr.co/loop-participant
+```
+
+O login usa Authorization Code + PKCE e callback loopback. O access token fica
+somente na memória do main process e não cruza o deep link, renderer ou página capturada.
+
 Para validar o fluxo Web com o ambiente Verification local ativo:
 
 ```bash

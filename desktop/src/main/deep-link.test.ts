@@ -13,7 +13,25 @@ describe('desktop Loop bootstrap', () => {
       loopId: 'lts_checkout',
       cycleId: '88ad0919-9754-4787-8a43-fc4bf79e52bd',
       surface: 'web',
+      access: 'organization',
+      deployment: 'local',
     });
+  });
+
+  it('binds a production launch to the trusted remote runtime without carrying endpoints', () => {
+    const parsed = parseDesktopCaptureLaunch(
+      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&deployment=production&v=1',
+    );
+    expect(parsed.deployment).toBe('production');
+    expect(JSON.stringify(parsed)).not.toMatch(/api\.voidr|collector|https?:/i);
+  });
+
+  it('marks an external participant launch without carrying an access token', () => {
+    const parsed = parseDesktopCaptureLaunch(
+      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&access=participant',
+    );
+    expect(parsed.access).toBe('participant');
+    expect(JSON.stringify(parsed)).not.toMatch(/bearer|access_token|authorization/i);
   });
 
   it('rejects extra parameters, fragments and unsupported surfaces', () => {
@@ -22,6 +40,8 @@ describe('desktop Loop bootstrap', () => {
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=voice&v=1',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1#secret',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?surface=web&v=1',
+      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&access=admin',
+      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&deployment=staging',
     ]) {
       expect(() => parseDesktopCaptureLaunch(value)).toThrow();
     }

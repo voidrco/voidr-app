@@ -70,6 +70,20 @@ export const defaultRuntime: LocalRuntimeConfig =
         )
       : PRODUCTION;
 
+/**
+ * A secret-free launch carries only a server-owned deployment label. Resolve
+ * that label against baked, allowlisted endpoints so a production link cannot
+ * accidentally query a developer's localhost (and cannot inject an origin).
+ */
+export function runtimeForDeployment(
+  deployment: 'local' | 'production',
+  current: LocalRuntimeConfig,
+  organizationId: string,
+): LocalRuntimeConfig {
+  const selected = deployment === 'production' ? PRODUCTION : current.localAdapter ? current : LOCAL;
+  return { ...selected, organizationId };
+}
+
 export function isPendingOrganization(organizationId: string): boolean {
   return organizationId === PENDING_ORGANIZATION;
 }

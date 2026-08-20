@@ -75,7 +75,7 @@ import {
   type VoiceVisualFlow,
   type VoiceVisualFlowEvent,
 } from './voice-flow';
-import { defaultRuntime } from './channels';
+import { defaultRuntime, runtimeForDeployment } from './channels';
 import { WorkspaceHome } from './WorkspaceHome';
 
 const idleStatus: CaptureStatus = {
@@ -283,12 +283,11 @@ function App() {
           });
       return;
     }
-    // The organization is never baked into the build — it arrives with the deep
-    // link. Gating this on localAdapter kept every packaged build pinned to the
-    // placeholder tenant.
-    const launchRuntime = runtime.organizationId !== launch.organizationId
-      ? { ...runtime, organizationId: launch.organizationId }
-      : runtime;
+    const launchRuntime = runtimeForDeployment(
+      launch.deployment,
+      runtime,
+      launch.organizationId,
+    );
     acceptingLaunch.current = key;
     setBusy(true);
     setFeedback({

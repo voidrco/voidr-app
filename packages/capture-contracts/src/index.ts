@@ -69,6 +69,8 @@ export const desktopCaptureLaunchSchema = z.object({
   loopId: boundedId,
   cycleId: opaqueId,
   surface: desktopCaptureSurfaceSchema,
+  access: z.enum(["organization", "participant"]).default("organization"),
+  deployment: z.enum(["local", "production"]).default("local"),
 });
 export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
 

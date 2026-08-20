@@ -387,7 +387,9 @@ export class VoidrServiceClient {
     const replayAvailable = record(context.replay).available === true;
     const evidence = list(context.evidence ?? value.evidence)
       .slice(0, 200)
-      .filter((raw) => evidenceKind(record(raw).kind) !== "replay" || replayAvailable)
+      .filter(
+        (raw) => evidenceKind(record(raw).kind) !== "replay" || replayAvailable,
+      )
       .map((raw, index) => {
         const item = record(raw);
         const kind = evidenceKind(item.kind);
@@ -397,7 +399,8 @@ export class VoidrServiceClient {
           240,
         );
         const title =
-          kind === "replay" && /^(?:session replay|replay da sessão)$/i.test(rawTitle)
+          kind === "replay" &&
+          /^(?:session replay|replay da sessão)$/i.test(rawTitle)
             ? "Replay do teste"
             : rawTitle;
         const detail = stringValue(item.detail || item.note, "", 1_000) || null;
@@ -443,16 +446,29 @@ export class VoidrServiceClient {
     return parseDesktopCaptureLaunch(stringValue(value.launchUrl));
   }
 
-  async resolveDesktopLaunch(input: unknown): Promise<ResolvedDesktopHandoff> {
+  async resolveDesktopLaunch(
+    input: unknown,
+    remoteAccessToken?: string,
+  ): Promise<ResolvedDesktopHandoff> {
     const launch: DesktopCaptureLaunch =
       desktopCaptureLaunchSchema.parse(input);
-    const root = this.runtime.localAdapter
-      ? "loop-test-dev/scenarios"
-      : "loop-test/scenarios";
+    const participant = launch.access === "participant";
+    if (!this.runtime.localAdapter && !remoteAccessToken) {
+      throw new Error(
+        "A conta Google precisa ser confirmada antes de iniciar este teste.",
+      );
+    }
+    const endpoint = participant
+      ? `loop-participant/captures/${encodeURIComponent(launch.loopId)}/${encodeURIComponent(launch.cycleId)}`
+      : `${this.runtime.localAdapter ? "loop-test-dev/scenarios" : "loop-test/scenarios"}/${encodeURIComponent(launch.loopId)}` +
+        `/cycles/${encodeURIComponent(launch.cycleId)}/capture-handoff`;
     const value = await jsonRequest<Json>(
-      `${this.runtime.serviceUrl}/${root}/${encodeURIComponent(launch.loopId)}` +
-        `/cycles/${encodeURIComponent(launch.cycleId)}/capture-handoff`,
-      { headers: this.localHeaders(launch.organizationId) },
+      `${this.runtime.serviceUrl}/${endpoint}`,
+      {
+        headers: this.runtime.localAdapter
+          ? this.localHeaders(launch.organizationId)
+          : { Authorization: `Bearer ${remoteAccessToken}` },
+      },
     );
     const handoff = desktopHandoffSchema.parse({
       ...value,
