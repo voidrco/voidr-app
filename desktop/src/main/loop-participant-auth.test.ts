@@ -25,7 +25,10 @@ describe('LoopParticipantAuthSession', () => {
       const callback = new URL(authorize.searchParams.get('redirect_uri')!);
       callback.searchParams.set('code', 'organization-code');
       callback.searchParams.set('state', authorize.searchParams.get('state')!);
-      setTimeout(() => get(callback).on('error', () => undefined), 0);
+      setTimeout(
+        () => get(callback, (response) => response.resume()).on('error', () => undefined),
+        0,
+      );
     });
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
@@ -39,11 +42,47 @@ describe('LoopParticipantAuthSession', () => {
     );
 
     const session = new LoopParticipantAuthSession();
-    await expect(session.accessToken('organization')).resolves.toContain('organization-access');
+    await expect(
+      session.accessToken('organization', 'org_voidrProduction'),
+    ).resolves.toContain('organization-access');
 
     const authorize = new URL(authorizationUrl);
     expect(authorize.searchParams.get('audience')).toBe('https://service.bounties4.com/');
+    expect(authorize.searchParams.get('organization')).toBe('org_voidrProduction');
     expect(authorize.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:47821/callback');
+  });
+
+  it('never reuses an organization token for a different tenant', async () => {
+    const openedOrganizations: string[] = [];
+    openExternal.mockImplementation(async (value: string) => {
+      const authorize = new URL(value);
+      openedOrganizations.push(authorize.searchParams.get('organization') ?? '');
+      const callback = new URL(authorize.searchParams.get('redirect_uri')!);
+      callback.searchParams.set('code', `code-${openedOrganizations.length}`);
+      callback.searchParams.set('state', authorize.searchParams.get('state')!);
+      setTimeout(
+        () => get(callback, (response) => response.resume()).on('error', () => undefined),
+        0,
+      );
+    });
+    let token = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: `organization-access-token-${++token}-that-stays-in-main-process`,
+          token_type: 'Bearer',
+          expires_in: 600,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const session = new LoopParticipantAuthSession();
+    const first = await session.accessToken('organization', 'org_firstTenant');
+    const second = await session.accessToken('organization', 'org_secondTenant');
+
+    expect(first).not.toBe(second);
+    expect(openedOrganizations).toEqual(['org_firstTenant', 'org_secondTenant']);
   });
 
   it('uses system-browser PKCE and keeps the access token in main-process memory', async () => {
@@ -57,7 +96,10 @@ describe('LoopParticipantAuthSession', () => {
       const callback = new URL(authorize.searchParams.get('redirect_uri')!);
       callback.searchParams.set('code', 'single-use-code');
       callback.searchParams.set('state', authorize.searchParams.get('state')!);
-      setTimeout(() => get(callback).on('error', () => undefined), 0);
+      setTimeout(
+        () => get(callback, (response) => response.resume()).on('error', () => undefined),
+        0,
+      );
     });
     const tokenRequest = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(

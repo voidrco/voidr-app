@@ -282,7 +282,12 @@ function registerIpc(): void {
       const client = new VoidrServiceClient(parsed.runtime);
       const remoteToken = parsed.runtime.localAdapter
         ? undefined
-        : await loopParticipantAuth.accessToken(parsed.launch.access);
+        : await loopParticipantAuth.accessToken(
+            parsed.launch.access,
+            parsed.launch.access === 'organization'
+              ? parsed.launch.organizationId
+              : undefined,
+          );
       const handoff = await client.resolveDesktopLaunch(
         parsed.launch,
         remoteToken,

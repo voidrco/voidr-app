@@ -11,6 +11,9 @@ const tokenResponseSchema = z.object({
 
 type CachedToken = { value: string; expiresAt: number };
 type LoopAuthProfile = 'organization' | 'participant';
+type AuthCacheKey = string;
+
+const organizationIdSchema = z.string().trim().regex(/^org_[A-Za-z0-9]+$/).max(100);
 
 const ORGANIZATION_AUTH = {
   domain: 'bounties4.us.auth0.com',
@@ -20,24 +23,31 @@ const ORGANIZATION_AUTH = {
 } as const;
 
 export class LoopParticipantAuthSession {
-  readonly #cached = new Map<LoopAuthProfile, CachedToken>();
-  readonly #flights = new Map<LoopAuthProfile, Promise<string>>();
+  readonly #cached = new Map<AuthCacheKey, CachedToken>();
+  readonly #flights = new Map<AuthCacheKey, Promise<string>>();
 
-  async accessToken(profile: LoopAuthProfile = 'participant'): Promise<string> {
-    const cached = this.#cached.get(profile);
+  async accessToken(
+    profile: LoopAuthProfile = 'participant',
+    organizationId?: string,
+  ): Promise<string> {
+    const organization = profile === 'organization'
+      ? organizationIdSchema.parse(organizationId)
+      : undefined;
+    const cacheKey = organization ? `${profile}:${organization}` : profile;
+    const cached = this.#cached.get(cacheKey);
     if (cached && cached.expiresAt - Date.now() > 60_000) return cached.value;
-    const inFlight = this.#flights.get(profile);
+    const inFlight = this.#flights.get(cacheKey);
     if (inFlight) return inFlight;
-    const flight = this.#authorize(profile);
-    this.#flights.set(profile, flight);
+    const flight = this.#authorize(profile, organization);
+    this.#flights.set(cacheKey, flight);
     try {
       return await flight;
     } finally {
-      this.#flights.delete(profile);
+      this.#flights.delete(cacheKey);
     }
   }
 
-  async #authorize(profile: LoopAuthProfile): Promise<string> {
+  async #authorize(profile: LoopAuthProfile, organizationId?: string): Promise<string> {
     const organization = profile === 'organization';
     const domain = organization
       ? process.env.VOIDR_ORGANIZATION_AUTH_DOMAIN?.trim() || ORGANIZATION_AUTH.domain
@@ -70,6 +80,7 @@ export class LoopParticipantAuthSession {
     authorize.searchParams.set('scope', 'openid profile email');
     authorize.searchParams.set('audience', audience);
     authorize.searchParams.set('connection', 'google-oauth2');
+    if (organizationId) authorize.searchParams.set('organization', organizationId);
     authorize.searchParams.set('code_challenge', challenge);
     authorize.searchParams.set('code_challenge_method', 'S256');
     authorize.searchParams.set('state', state);
@@ -91,20 +102,21 @@ export class LoopParticipantAuthSession {
       });
       if (!response.ok) throw new Error('A conta Google não pôde ser confirmada no app.');
       const body = tokenResponseSchema.parse(await response.json());
-      this.#cached.set(profile, {
+      const cacheKey = organizationId ? `${profile}:${organizationId}` : profile;
+      this.#cached.set(cacheKey, {
         value: body.access_token,
         expiresAt: Date.now() + body.expires_in * 1_000,
       });
       return body.access_token;
     } finally {
-      callback.close();
+      await callback.close();
     }
   }
 
   async #listenForCallback(expectedState: string, port: number): Promise<{
     port: number;
     code: Promise<string>;
-    close: () => void;
+    close: () => Promise<void>;
   }> {
     let server: Server;
     let resolveCode!: (value: string) => void;
@@ -158,14 +170,20 @@ export class LoopParticipantAuthSession {
     }
     const timeout = setTimeout(() => {
       rejectCode(new Error('O login expirou. Tente abrir o convite novamente.'));
-      server.close();
+      void new Promise<void>((resolve) => server.close(() => resolve()));
     }, 120_000);
     return {
       port: address.port,
       code,
-      close: () => {
+      close: async () => {
         clearTimeout(timeout);
-        server.close();
+        if (!server.listening) return;
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        // macOS can keep the loopback listener unavailable for a few ticks
+        // after close. Wait briefly so switching organizations cannot strand
+        // the next PKCE attempt on the previous callback socket.
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
       },
     };
   }
