@@ -343,7 +343,7 @@ export class WebCaptureController {
         const raw = (await withTimeout(
           this.#view.webContents.executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [
             {
-              code: `Promise.resolve(globalThis.VoidrCollector?.stopAndFlush?.()).then((value) => value ?? null)`,
+              code: `(()=>{const collector=globalThis.VoidrCollector;const stop=collector?.stopAndFlush??collector?.stopAndFinalize;if(typeof stop!=="function")return null;return Promise.resolve(stop.call(collector)).then((value)=>value??null)})()`,
             },
           ]),
           COLLECTOR_STOP_TIMEOUT_MS,
@@ -1035,9 +1035,14 @@ export class WebCaptureController {
         cycleNumber: context.cycleNumber,
       },
     };
-    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:[]};document.addEventListener('click',(event)=>{const element=event.target instanceof Element?event.target.closest('[data-testid],[data-test],button,a,input,select,textarea,[role]'):null;const tag=element?.tagName?.toLowerCase?.()||'element';const testId=element?.getAttribute?.('data-testid')||element?.getAttribute?.('data-test')||'';const id=element?.id||'';const selector=(id?'#'+CSS.escape(id):testId?tag+'[data-testid="'+CSS.escape(testId)+'"]':tag).slice(0,240);const clicks=globalThis.__voidrDesktopSignals?.clicks;if(Array.isArray(clicks)){clicks.push({selector,x:Math.round(event.clientX),y:Math.round(event.clientY)});if(clicks.length>50)clicks.shift()}},{capture:true,passive:true});Promise.resolve(globalThis.VoidrCollector.init(${JSON.stringify(options)})).then(()=>({sessionId:globalThis.VoidrCollector.getSessionId?.()||null,ready:Boolean(globalThis.VoidrCollector.getSessionId?.())}));`;
+    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:[]};document.addEventListener('click',(event)=>{const element=event.target instanceof Element?event.target.closest('[data-testid],[data-test],button,a,input,select,textarea,[role]'):null;const tag=element?.tagName?.toLowerCase?.()||'element';const testId=element?.getAttribute?.('data-testid')||element?.getAttribute?.('data-test')||'';const id=element?.id||'';const selector=(id?'#'+CSS.escape(id):testId?tag+'[data-testid="'+CSS.escape(testId)+'"]':tag).slice(0,240);const clicks=globalThis.__voidrDesktopSignals?.clicks;if(Array.isArray(clicks)){clicks.push({selector,x:Math.round(event.clientX),y:Math.round(event.clientY)});if(clicks.length>50)clicks.shift()}},{capture:true,passive:true});(()=>{const collector=globalThis.VoidrCollector;const durableStop=typeof collector?.stopAndFlush==='function'||typeof collector?.stopAndFinalize==='function';if(!durableStop)return{sessionId:null,ready:false,durableStop:false};return Promise.resolve(collector.init(${JSON.stringify(options)})).then(()=>({sessionId:collector.getSessionId?.()||null,ready:Boolean(collector.getSessionId?.()),durableStop:true}))})();`;
     const result = (await this.#view.webContents.executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [{ code }])) as
-      { sessionId?: unknown; ready?: unknown } | undefined;
+      { sessionId?: unknown; ready?: unknown; durableStop?: unknown } | undefined;
+    if (result?.durableStop !== true) {
+      throw new Error(
+        'O Collector publicado está incompatível com o Stop seguro. Atualize o bundle antes de iniciar o teste.',
+      );
+    }
     if (result?.ready !== true || typeof result.sessionId !== 'string') {
       throw new Error('O collector não confirmou uma Session autenticada.');
     }
