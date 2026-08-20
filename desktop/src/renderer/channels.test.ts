@@ -28,6 +28,24 @@ describe('capture deployment channels', () => {
     expect(runtimeForDeployment('local', local, 'org_fixture')).toMatchObject({
       serviceUrl: 'http://127.0.0.1:3000/v1',
       localAdapter: true,
+      localDevKey: 'voidr-verification-local',
+      organizationId: 'org_fixture',
+    });
+  });
+
+  it('ignores a stale persisted runtime when a local launch arrives', () => {
+    const stale = {
+      ...local,
+      serviceUrl: 'http://127.0.0.1:3999/v1',
+      collectorUrl: 'http://127.0.0.1:3998',
+      localDevKey: 'obsolete-key',
+    };
+
+    expect(runtimeForDeployment('local', stale, 'org_fixture')).toMatchObject({
+      serviceUrl: 'http://127.0.0.1:3000/v1',
+      collectorUrl: 'http://localhost:3100',
+      collectorScriptUrl: 'http://localhost:8889/dist/recorder.min.js',
+      localDevKey: 'voidr-verification-local',
       organizationId: 'org_fixture',
     });
   });

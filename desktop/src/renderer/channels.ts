@@ -77,10 +77,14 @@ export const defaultRuntime: LocalRuntimeConfig =
  */
 export function runtimeForDeployment(
   deployment: 'local' | 'production',
-  current: LocalRuntimeConfig,
+  _current: LocalRuntimeConfig,
   organizationId: string,
 ): LocalRuntimeConfig {
-  const selected = deployment === 'production' ? PRODUCTION : current.localAdapter ? current : LOCAL;
+  // A deep link's deployment label is server-owned. Never let a persisted
+  // runtime from an older desktop build override its baked trust boundary —
+  // stale dev keys/endpoints otherwise turn a valid local Loop into a
+  // misleading tenant-scoped "not found" response.
+  const selected = deployment === 'production' ? PRODUCTION : LOCAL;
   return { ...selected, organizationId };
 }
 
