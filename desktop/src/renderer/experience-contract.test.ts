@@ -143,6 +143,7 @@ describe("desktop experience contract", () => {
     expect(appSource).toContain("runtimeForDeployment(");
     expect(appSource).toContain("launch.organizationId");
     expect(appSource).toContain("capture.acceptLaunch(launch, launchRuntime)");
+    expect(appSource).toContain('Este convite não está mais disponível.');
     expect(appSource).toContain("setRuntime(launchRuntime)");
   });
 

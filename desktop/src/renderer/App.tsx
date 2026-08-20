@@ -102,6 +102,17 @@ function safeError(error: unknown): string {
   return error instanceof Error ? redactText(error.message) : 'A operação não pôde ser concluída.';
 }
 
+function launchErrorMessage(error: unknown): string {
+  const message = safeError(error);
+  if (/not found|não encontrad|identifier/i.test(message)) {
+    return 'Este convite não está mais disponível. O Loop pode ter sido excluído; inicie um novo teste pela plataforma.';
+  }
+  if (/must belong to an organization|pertencer a uma organização/i.test(message)) {
+    return 'Sua conta precisa ser confirmada na organização deste Loop. Abra o convite novamente e conclua o login do Google.';
+  }
+  return message;
+}
+
 function microphoneError(error: unknown): string {
   const name = error instanceof DOMException ? error.name : '';
   if (name === 'NotAllowedError' || name === 'SecurityError') {
@@ -334,7 +345,7 @@ function App() {
       setFeedback({
         tone: 'error',
         title: 'Não foi possível abrir o teste',
-        message: safeError(error),
+        message: launchErrorMessage(error),
       });
     } finally {
       acceptingLaunch.current = undefined;
