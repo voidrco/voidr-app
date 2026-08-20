@@ -454,13 +454,16 @@ async function main() {
     control = new DevToolsClient(controlTarget.webSocketDebuggerUrl);
     const startResult = await control.evaluate(`(async()=>{
       const deadline=Date.now()+20000;
+      let lastStatus;
       while(Date.now()<deadline){
         const status=await window.voidrCapture.capture.status();
+        lastStatus=status;
         if(status?.stage==='recording') return status;
         if(status?.stage==='recoverable_error'||status?.stage==='terminal_error') throw new Error(status.message||status.errorCode||'Handoff falhou.');
         await new Promise((resolve)=>setTimeout(resolve,200));
       }
-      throw new Error('Voidr Capture não consumiu o deep link em 20s.');
+      const pending=await window.voidrCapture.capture.pendingLaunch();
+      throw new Error('Voidr Capture não consumiu o deep link em 20s. Último estado: '+JSON.stringify(lastStatus)+'; pending: '+JSON.stringify(pending));
     })()`);
     if (startResult?.stage !== 'recording') throw new Error('O host não entrou em recording.');
 
@@ -1272,7 +1275,10 @@ async function main() {
       })()`);
       return value?.some((step) => step.active) ? value : undefined;
     });
-    const finalStatus = await control.evaluate('globalThis.__voidrSmokeStop', 75_000);
+    // Stop can legitimately spend 25s sealing, 25s confirming the collector
+    // watermark and 30s observing the first Cycle state before returning
+    // `processing`; keep the harness above that bounded production budget.
+    const finalStatus = await control.evaluate('globalThis.__voidrSmokeStop', 130_000);
     if (!['processing', 'ready_for_review'].includes(finalStatus?.stage)) {
       throw new Error(`Finalização terminou em ${finalStatus?.stage ?? 'estado desconhecido'}.`);
     }

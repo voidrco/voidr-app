@@ -208,12 +208,12 @@ describe('Electron security contract', () => {
     expect(captureSource).toContain('resumedInBackground: true');
   });
 
-  it('rejects an incompatible collector before recording and accepts either durable stop name', () => {
-    expect(captureSource).toContain("typeof collector?.stopAndFlush==='function'");
+  it('rejects an incompatible collector before recording and requires a sealing stop', () => {
     expect(captureSource).toContain("typeof collector?.stopAndFinalize==='function'");
     expect(captureSource).toContain('result?.durableStop !== true');
     expect(captureSource).toContain('incompatível com o Stop seguro');
-    expect(captureSource).toContain('collector?.stopAndFlush??collector?.stopAndFinalize');
+    expect(captureSource).toContain('collector?.stopAndFinalize');
+    expect(captureSource).not.toContain('collector?.stopAndFlush??collector?.stopAndFinalize');
   });
 
   it('bounds target loading and retries once without deleting the user session', () => {
