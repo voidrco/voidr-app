@@ -3,7 +3,6 @@ import type { Rectangle } from 'electron';
 import { BrowserWindow, WebContentsView } from 'electron';
 import {
   annotationInputSchema,
-  collectorStopReceiptSchema,
   isTrustedWebUrl,
   prepareWebInputSchema,
   redactText,
@@ -37,12 +36,15 @@ import {
   VoidrApiError,
   VoidrServiceClient,
 } from './service-client';
+import { inspectCollectorStopAttempt } from './collector-stop';
 
 const COLLECTOR_WORLD = 1004;
 const REGION_SELECTION_WORLD = 1005;
 const ELEMENT_SELECTION_WORLD = 1006;
 const MAX_COLLECTOR_SCRIPT_BYTES = 5 * 1024 * 1024;
 const COLLECTOR_STOP_TIMEOUT_MS = 25_000;
+const COLLECTOR_STOP_MAX_ATTEMPTS = 3;
+const COLLECTOR_STOP_RETRY_DELAY_MS = 500;
 const COLLECTOR_EVENT_WRITE_TIMEOUT_MS = 3_000;
 const CDP_NETWORK_SETTLE_TIMEOUT_MS = 250;
 const CDP_NETWORK_SETTLE_POLL_MS = 20;
@@ -340,24 +342,11 @@ export class WebCaptureController {
           'Os últimos sinais técnicos ainda não foram sincronizados. Tente finalizar novamente.',
         );
         await this.#ingestLifecycle('seal.requested', { host: 'electron' });
-        const raw = (await withTimeout(
-          this.#view.webContents.executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [
-            {
-              code: `(()=>{const collector=globalThis.VoidrCollector;const stop=collector?.stopAndFinalize;if(typeof stop!=="function")return null;return Promise.resolve(stop.call(collector)).then((value)=>value??null)})()`,
-            },
-          ]),
+        const receipt = await withTimeout(
+          this.#stopCollectorDurably(),
           COLLECTOR_STOP_TIMEOUT_MS,
           'A consolidação está demorando mais que o esperado. Seus dados locais continuam preservados.',
-        )) as Record<string, unknown> | null;
-        if (!raw) throw new Error('O collector não retornou o receipt de Stop.');
-        const sealedThrough = Number(raw.sealedThrough ?? raw.finalizedThrough ?? raw.finalChunkSeq);
-        const receipt = collectorStopReceiptSchema.parse({
-          sessionId: raw.sessionId,
-          ok: raw.ok,
-          flushed: raw.flushed,
-          sealed: raw.sealed,
-          sealedThrough,
-        });
+        );
         this.#stopReceipt = receipt;
         this.#setState(
           captureReducer(this.#state, {
@@ -380,6 +369,27 @@ export class WebCaptureController {
         throw error;
       }
     });
+  }
+
+  async #stopCollectorDurably(): Promise<CollectorStopReceipt> {
+    if (!this.#view) throw new Error('Nenhuma captura Web está ativa.');
+    let lastMessage = 'O collector não retornou o receipt de Stop.';
+    for (let attempt = 1; attempt <= COLLECTOR_STOP_MAX_ATTEMPTS; attempt += 1) {
+      const raw = (await this.#view.webContents.executeJavaScriptInIsolatedWorld(
+        COLLECTOR_WORLD,
+        [
+          {
+            code: `(()=>{const collector=globalThis.VoidrCollector;const stop=collector?.stopAndFinalize;if(typeof stop!=="function")return null;return Promise.resolve(stop.call(collector)).then((value)=>value??null)})()`,
+          },
+        ],
+      )) as unknown;
+      const inspected = inspectCollectorStopAttempt(raw);
+      if (inspected.receipt) return inspected.receipt;
+      lastMessage = inspected.message;
+      if (!inspected.retryable || attempt === COLLECTOR_STOP_MAX_ATTEMPTS) break;
+      await new Promise((resolve) => setTimeout(resolve, COLLECTOR_STOP_RETRY_DELAY_MS * attempt));
+    }
+    throw new Error(lastMessage);
   }
 
   async annotate(input: unknown): Promise<{ evidenceRef: string }> {
