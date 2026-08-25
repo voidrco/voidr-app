@@ -76,15 +76,22 @@ export const defaultRuntime: LocalRuntimeConfig =
  * accidentally query a developer's localhost (and cannot inject an origin).
  */
 export function runtimeForDeployment(
-  deployment: 'local' | 'production',
+  deployment: 'local' | 'preview' | 'production',
   _current: LocalRuntimeConfig,
   organizationId: string,
+  previewSlug?: string,
 ): LocalRuntimeConfig {
   // A deep link's deployment label is server-owned. Never let a persisted
   // runtime from an older desktop build override its baked trust boundary —
   // stale dev keys/endpoints otherwise turn a valid local Loop into a
   // misleading tenant-scoped "not found" response.
-  const selected = deployment === 'production' ? PRODUCTION : LOCAL;
+  if (deployment === 'preview' && !previewSlug) throw new Error('O link de preview está incompleto.');
+  const selected =
+    deployment === 'production'
+      ? PRODUCTION
+      : deployment === 'preview'
+        ? preview(previewSlug!, PENDING_ORGANIZATION)
+        : LOCAL;
   return { ...selected, organizationId };
 }
 

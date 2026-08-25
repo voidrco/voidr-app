@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 
 const DESKTOP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAKE_DIR = path.join(DESKTOP_ROOT, 'out', 'make');
-const MANIFEST_PATH = 'capture/latest.json';
 
 function arg(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
@@ -26,11 +25,18 @@ function arg(name, fallback) {
 }
 
 const bucket = arg('bucket');
+const channel = arg('channel', 'production');
 const dryRun = process.argv.includes('--dry-run');
 if (!bucket) {
   console.error('Missing --bucket (e.g. voidr_private_staging).');
   process.exit(1);
 }
+if (!['preview', 'production'].includes(channel)) {
+  console.error('Invalid --channel. Use preview or production.');
+  process.exit(1);
+}
+const releaseRoot = channel === 'preview' ? 'capture/preview' : 'capture';
+const manifestPath = `${releaseRoot}/latest.json`;
 
 const version = JSON.parse(
   readFileSync(path.join(DESKTOP_ROOT, '..', 'package.json'), 'utf8')
@@ -73,7 +79,10 @@ function classify(file) {
   };
 }
 
-const builds = walk(MAKE_DIR).map(classify).filter(Boolean);
+const builds = walk(MAKE_DIR)
+  .filter((file) => path.basename(file).includes(version))
+  .map(classify)
+  .filter(Boolean);
 if (builds.length === 0) {
   console.error(`No installers found in ${MAKE_DIR}. Run "npm run capture:make" first.`);
   process.exit(1);
@@ -87,7 +96,7 @@ function readRemoteManifest() {
   try {
     const dir = mkdtempSync(path.join(tmpdir(), 'capture-manifest-'));
     const local = path.join(dir, 'latest.json');
-    gsutil(['cp', `gs://${bucket}/${MANIFEST_PATH}`, local]);
+    gsutil(['cp', `gs://${bucket}/${manifestPath}`, local]);
     return JSON.parse(readFileSync(local, 'utf8'));
   } catch {
     return null;
@@ -105,7 +114,7 @@ const entries = builds.map((build) => {
     arch: build.arch,
     format: build.format,
     filename: build.filename,
-    key: `capture/${version}/${build.filename}`,
+    key: `${releaseRoot}/${version}/${build.filename}`,
     sizeBytes: statSync(build.source).size,
     sha256: createHash('sha256').update(buffer).digest('hex')
   };
@@ -128,7 +137,7 @@ const manifest = {
   ]
 };
 
-console.log(`voidr-capture ${version} → gs://${bucket}/capture/${version}/`);
+console.log(`voidr-capture ${version} → gs://${bucket}/${releaseRoot}/${version}/`);
 for (const entry of entries) {
   console.log(`  ${entry.platform}/${entry.arch}/${entry.format}  ${entry.filename}`);
 }
@@ -144,5 +153,5 @@ for (let i = 0; i < entries.length; i += 1) {
 // Manifest last: it must never advertise an object that is not uploaded yet.
 const manifestFile = path.join(mkdtempSync(path.join(tmpdir(), 'capture-publish-')), 'latest.json');
 writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
-gsutil(['-h', 'Content-Type:application/json', 'cp', manifestFile, `gs://${bucket}/${MANIFEST_PATH}`]);
-console.log(`manifest → gs://${bucket}/${MANIFEST_PATH}`);
+gsutil(['-h', 'Content-Type:application/json', 'cp', manifestFile, `gs://${bucket}/${manifestPath}`]);
+console.log(`manifest → gs://${bucket}/${manifestPath}`);

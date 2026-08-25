@@ -63,15 +63,25 @@ export type HarnessDeliveryState = z.infer<typeof harnessDeliveryStateSchema>;
  * Authorization is resolved by the signed-in app (or the explicit localhost
  * adapter) after launch; the URI itself never grants access to a Cycle.
  */
-export const desktopCaptureLaunchSchema = z.object({
-  version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
-  organizationId: boundedId,
-  loopId: boundedId,
-  cycleId: opaqueId,
-  surface: desktopCaptureSurfaceSchema,
-  access: z.enum(["organization", "participant"]).default("organization"),
-  deployment: z.enum(["local", "production"]).default("local"),
-});
+export const desktopCaptureLaunchSchema = z
+  .object({
+    version: z.literal(VOIDR_CAPTURE_LAUNCH_VERSION),
+    organizationId: boundedId,
+    loopId: boundedId,
+    cycleId: opaqueId,
+    surface: desktopCaptureSurfaceSchema,
+    access: z.enum(["organization", "participant"]).default("organization"),
+    deployment: z.enum(["local", "preview", "production"]).default("local"),
+    previewSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).optional(),
+  })
+  .superRefine((launch, context) => {
+    if (launch.deployment === "preview" && !launch.previewSlug) {
+      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is required" });
+    }
+    if (launch.deployment !== "preview" && launch.previewSlug) {
+      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is not allowed" });
+    }
+  });
 export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
 
 /** Canonical Voidr profile projected for a human-owned Cycle. */

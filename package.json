@@ -1,6 +1,6 @@
 {
   "name": "voidr-app",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "description": "Voidr Capture desktop application for Web and Mobile verification",
   "license": "UNLICENSED",
@@ -40,5 +40,11 @@
     "picomatch": "2.3.2",
     "tar": "7.5.22",
     "tmp": "0.2.7"
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.4": true,
+    "esbuild@0.28.2": true,
+    "fs-xattr@0.3.1": true,
+    "macos-alias@0.2.12": true
   }
 }

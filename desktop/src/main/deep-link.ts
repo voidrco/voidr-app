@@ -45,14 +45,14 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     segments[0] !== 'loops' ||
     segments[2] !== 'cycles' ||
     keys.length < 3 ||
-    keys.length > 5 ||
+    keys.length > 6 ||
     new Set(keys).size !== keys.length ||
     keys.some((key) =>
-      !['organization', 'surface', 'v', 'access', 'deployment'].includes(key),
+      !['organization', 'surface', 'v', 'access', 'deployment', 'preview'].includes(key),
     ) ||
     (url.searchParams.has('access') && url.searchParams.get('access') !== 'participant') ||
     (url.searchParams.has('deployment') &&
-      !['local', 'production'].includes(url.searchParams.get('deployment') ?? '')) ||
+      !['local', 'preview', 'production'].includes(url.searchParams.get('deployment') ?? '')) ||
     url.searchParams.get('v') !== '1'
   ) {
     throw new Error('O link do Voidr Capture está incompleto ou não é suportado.');
@@ -65,6 +65,7 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     surface: url.searchParams.get('surface'),
     access: url.searchParams.get('access') ?? 'organization',
     deployment: url.searchParams.get('deployment') ?? 'local',
+    previewSlug: url.searchParams.get('preview') ?? undefined,
   });
 }
 

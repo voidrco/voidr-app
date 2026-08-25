@@ -33,6 +33,18 @@ describe('capture deployment channels', () => {
     });
   });
 
+  it('derives branch preview endpoints without accepting arbitrary origins', () => {
+    expect(
+      runtimeForDeployment('preview', local, 'org_serasa_agro', 'release-hive-tctx'),
+    ).toMatchObject({
+      serviceUrl: 'https://release-hive-tctx.api-preview.voidr.co/v1',
+      collectorUrl: 'https://collector-staging.voidr.co',
+      platformUrl: 'https://release-hive-tctx.app-preview.voidr.co',
+      localAdapter: false,
+      organizationId: 'org_serasa_agro',
+    });
+  });
+
   it('ignores a stale persisted runtime when a local launch arrives', () => {
     const stale = {
       ...local,
