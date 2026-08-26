@@ -73,7 +73,10 @@ module.exports = {
   makers: [
     { name: '@electron-forge/maker-zip', platforms: ['darwin', 'linux', 'win32'] },
     { name: '@electron-forge/maker-dmg', config: { format: 'ULFO' } },
-    { name: '@electron-forge/maker-squirrel', config: { name: 'voidr_capture' } },
+    {
+      name: '@electron-forge/maker-squirrel',
+      config: { name: 'voidr_capture', authors: 'Voidr' },
+    },
     { name: '@electron-forge/maker-deb', config: { options: { categories: ['Development'] } } },
   ],
 };
