@@ -31,3 +31,9 @@ jobs:
       - run: npm run test:capture
       - run: npm run capture:build
       - run: npm run capture:make
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: voidr-capture-windows
+          path: desktop/out/make/**
+          if-no-files-found: error
