@@ -298,6 +298,7 @@ function App() {
       launch.deployment,
       runtime,
       launch.organizationId,
+      launch.previewSlug,
     );
     acceptingLaunch.current = key;
     setBusy(true);
