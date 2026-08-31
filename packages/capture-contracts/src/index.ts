@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const CAPTURE_HOST_VERSION = "CAPTURE-HOST/1" as const;
 export const VOIDR_CAPTURE_LAUNCH_VERSION = "VOIDR-CAPTURE-LAUNCH/1" as const;
+export const PENDING_CAPTURE_ORGANIZATION_ID = "org_pending_launch" as const;
 
 const boundedId = z.string().trim().min(1).max(200);
 const opaqueId = z.string().uuid();

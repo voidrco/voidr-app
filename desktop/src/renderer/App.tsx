@@ -75,7 +75,14 @@ import {
   type VoiceVisualFlow,
   type VoiceVisualFlowEvent,
 } from './voice-flow';
-import { defaultRuntime, runtimeForDeployment } from './channels';
+import {
+  captureChannel,
+  isPendingOrganization,
+  restoreRuntime,
+  runtimeForDeployment,
+  serializeWorkspaceBinding,
+  workspaceContextLabel,
+} from './channels';
 import { WorkspaceHome } from './WorkspaceHome';
 
 const idleStatus: CaptureStatus = {
@@ -88,6 +95,7 @@ type DoctorResult = Awaited<ReturnType<typeof window.voidrCapture.doctor>>;
 type MobileVerification = Record<string, unknown>;
 type Notice = { tone: 'success' | 'warning' | 'error' | 'info'; title: string; message?: string };
 type AnnotationNotice = Notice & { kind?: AnnotationKind; active: boolean };
+type WorkspaceConnection = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 function elapsed(value: number): string {
   const seconds = Math.floor(value / 1_000);
@@ -146,13 +154,12 @@ function App() {
   const [statusHydrated, setStatusHydrated] = useState(false);
   const [homeView, setHomeView] = useState<'loops' | 'capture'>('loops');
   const [mode, setMode] = useState<'web' | 'mobile' | 'api'>('web');
-  const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() => {
-    try {
-      return { ...defaultRuntime, ...JSON.parse(localStorage.getItem('voidr.capture.runtime') ?? '{}') };
-    } catch {
-      return defaultRuntime;
-    }
-  });
+  const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() =>
+    restoreRuntime(localStorage.getItem('voidr.capture.runtime')),
+  );
+  const [workspaceConnection, setWorkspaceConnection] = useState<WorkspaceConnection>(() =>
+    isPendingOrganization(runtime.organizationId) ? 'disconnected' : 'connecting',
+  );
   const [recordingUrl, setRecordingUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Notice>();
@@ -380,8 +387,10 @@ function App() {
   }, [acceptLaunch, statusHydrated]);
 
   useEffect(() => {
-    const { localDevKey: _ephemeralSecret, ...persistableRuntime } = runtime;
-    localStorage.setItem('voidr.capture.runtime', JSON.stringify(persistableRuntime));
+    localStorage.setItem('voidr.capture.runtime', serializeWorkspaceBinding(runtime));
+    setWorkspaceConnection(
+      isPendingOrganization(runtime.organizationId) ? 'disconnected' : 'connecting',
+    );
   }, [runtime]);
 
   useEffect(() => {
@@ -1167,13 +1176,23 @@ function App() {
             </>
           ) : (
             <span className="capture-context-name">
-              {homeView === 'loops' ? 'Workspace local' : 'Captura local'}
+              {homeView === 'loops' ? workspaceContextLabel(runtime) : 'Captura local'}
             </span>
           )}
         </div>
         <div className="capture-topbar-status" role="status">
           <StatusDot live={recording} />
-          <span>{!activeCapture && homeView === 'loops' ? 'Conectado' : copy.title}</span>
+          <span>
+            {!activeCapture && homeView === 'loops'
+              ? workspaceConnection === 'connected'
+                ? 'Conectado'
+                : workspaceConnection === 'connecting'
+                  ? 'Conectando'
+                  : workspaceConnection === 'error'
+                    ? 'Atenção necessária'
+                    : 'Não conectado'
+              : copy.title}
+          </span>
           {recording && <code>{elapsed(status.elapsedMs)}</code>}
         </div>
       </header>
@@ -1190,14 +1209,16 @@ function App() {
                 <ListChecks size={15} />
                 <span>Loops</span>
               </button>
-              <button
-                type="button"
-                className={homeView === 'capture' ? 'active' : ''}
-                onClick={() => setHomeView('capture')}
-              >
-                <Plus size={15} />
-                <span>Nova captura</span>
-              </button>
+              {captureChannel !== 'production' && (
+                <button
+                  type="button"
+                  className={homeView === 'capture' ? 'active' : ''}
+                  onClick={() => setHomeView('capture')}
+                >
+                  <Plus size={15} />
+                  <span>Nova captura</span>
+                </button>
+              )}
             </nav>
             <div className="capture-sidebar-footer">
               <div className="capture-first-steps">
@@ -1208,10 +1229,12 @@ function App() {
                 <strong>Revise por pessoa</strong>
                 <p>Escolha um teste para ver feedback, replay e sinais técnicos.</p>
               </div>
-              <button type="button" onClick={() => { setHomeView('capture'); setSettingsOpen(true); }}>
-                <Settings2 size={14} />
-                <span>Configurações</span>
-              </button>
+              {captureChannel !== 'production' && (
+                <button type="button" onClick={() => { setHomeView('capture'); setSettingsOpen(true); }}>
+                  <Settings2 size={14} />
+                  <span>Configurações</span>
+                </button>
+              )}
             </div>
           </aside>
 
@@ -1219,6 +1242,9 @@ function App() {
             <WorkspaceHome
               runtime={runtime}
               busy={busy}
+              connectionRequired={isPendingOrganization(runtime.organizationId)}
+              onConnectWorkspace={() => window.voidrCapture.workspace.openPlatform(runtime)}
+              onConnectionChange={setWorkspaceConnection}
               onStartLoop={startWorkspaceLoop}
               onOpenCycle={(loopId, cycleId) => void window.voidrCapture.openCycle({
                 platformUrl: runtime.platformUrl,

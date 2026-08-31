@@ -26,10 +26,12 @@ storage, ledger, logs ou mensagens de erro.
 
 ## Gates antes de distribuição pública
 
-1. Assinar e notarizar macOS com Developer ID; assinar Windows com Authenticode; assinar os pacotes e
-   metadados Linux. A assinatura ad-hoc existe apenas para o installer local.
-2. Trocar credenciais locais por OAuth PKCE e armazenar refresh tokens no keychain do sistema por
-   uma camada baseada em `safeStorage`; nunca persistir chaves no renderer.
+1. macOS: usar somente o workflow que exige Developer ID, assina app e DMG, notariza os dois e valida
+   o ticket da Apple. Windows ainda exige Authenticode; Linux ainda exige assinatura dos pacotes e
+   metadados. A assinatura ad-hoc existe apenas para o installer local.
+2. OAuth PKCE organizacional já é usado em produção e os access tokens ficam somente na memória do
+   processo principal. Se refresh tokens forem adicionados, armazená-los no keychain do sistema por
+   uma camada baseada em `safeStorage`; nunca persistir tokens ou chaves no renderer.
 3. Habilitar update assinado, SBOM, dependency review, secret scanning e política de resposta a CVE.
    O maker de DMG atual herda uma advisory de parsing de imagem sem correção upstream; a pipeline
    deve receber apenas ícones versionados e confiáveis até sua substituição ou correção.
