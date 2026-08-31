@@ -24,6 +24,7 @@ describe('capture deployment channels', () => {
     expect(runtime).toMatchObject({
       serviceUrl: 'https://api.voidr.co/v1',
       collectorUrl: 'https://collector.voidr.co',
+      platformUrl: 'https://platform.voidr.co',
       localAdapter: false,
       organizationId: 'org_production',
     });

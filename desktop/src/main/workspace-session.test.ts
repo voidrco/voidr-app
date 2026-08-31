@@ -16,7 +16,7 @@ const remoteRuntime = {
   serviceUrl: 'https://api.voidr.co/v1',
   collectorUrl: 'https://collector.voidr.co',
   collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js',
-  platformUrl: 'https://app.voidr.co',
+  platformUrl: 'https://platform.voidr.co',
   localAdapter: false,
 };
 
@@ -80,6 +80,13 @@ describe('workspace session', () => {
   });
 
   it('opens only the platform paired with the trusted workspace channel', () => {
+    expect(
+      workspacePlatformLoopsUrl({
+        ...remoteRuntime,
+        organizationId: 'org_gWjyShjiTKA1ndtD',
+      }),
+    ).toBe('https://platform.voidr.co/loops');
+
     expect(
       workspacePlatformLoopsUrl({
         ...remoteRuntime,
