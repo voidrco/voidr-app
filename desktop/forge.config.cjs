@@ -131,6 +131,16 @@ module.exports = {
       name: '@electron-forge/maker-squirrel',
       config: { name: 'voidr_capture', authors: 'Voidr' },
     },
-    { name: '@electron-forge/maker-deb', config: { options: { categories: ['Development'] } } },
+    {
+      name: '@electron-forge/maker-deb',
+      config: {
+        options: {
+          name: 'voidr-capture',
+          productName: 'Voidr Capture',
+          bin: 'Voidr Capture',
+          categories: ['Development'],
+        },
+      },
+    },
   ],
 };
