@@ -30,7 +30,7 @@ const PRODUCTION: LocalRuntimeConfig = {
   serviceUrl: 'https://api.voidr.co/v1',
   collectorUrl: 'https://collector.voidr.co',
   collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js',
-  platformUrl: 'https://app.voidr.co',
+  platformUrl: 'https://platform.voidr.co',
   localAdapter: false,
   localDevKey: 'voidr-capture-production',
   organizationId: PENDING_CAPTURE_ORGANIZATION_ID,
