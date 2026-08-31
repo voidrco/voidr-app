@@ -3,10 +3,37 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
+const { notarize } = require('@electron/notarize');
 
 const iconExtension = process.platform === 'darwin' ? 'icns' : process.platform === 'win32' ? 'ico' : 'png';
 const execFileAsync = promisify(execFile);
 const appleSigningIdentity = process.env.APPLE_CODESIGN_IDENTITY;
+const appleNotaryKeychainProfile = process.env.APPLE_NOTARY_KEYCHAIN_PROFILE;
+const appleNotaryKeychain = process.env.APPLE_NOTARY_KEYCHAIN;
+const publicRelease = process.env.VOIDR_PUBLIC_RELEASE === '1';
+
+const releaseRequirements = {
+  APPLE_CODESIGN_IDENTITY: appleSigningIdentity,
+  APPLE_NOTARY_KEYCHAIN_PROFILE: appleNotaryKeychainProfile,
+  APPLE_NOTARY_KEYCHAIN: appleNotaryKeychain,
+};
+const missingReleaseRequirements = Object.entries(releaseRequirements)
+  .filter(([, value]) => !value)
+  .map(([name]) => name);
+
+if (publicRelease && missingReleaseRequirements.length > 0) {
+  throw new Error(
+    `Public Capture release requires: ${missingReleaseRequirements.join(', ')}`,
+  );
+}
+
+const appleNotarization =
+  appleNotaryKeychainProfile && appleNotaryKeychain
+    ? {
+        keychainProfile: appleNotaryKeychainProfile,
+        keychain: appleNotaryKeychain,
+      }
+    : undefined;
 
 module.exports = {
   packagerConfig: {
@@ -34,6 +61,7 @@ module.exports = {
     osxSign: appleSigningIdentity
       ? { identity: appleSigningIdentity, hardenedRuntime: true }
       : undefined,
+    osxNotarize: appleNotarization,
     protocols: [{ name: 'Voidr Capture', schemes: ['voidr'] }],
   },
   rebuildConfig: {},
@@ -51,6 +79,19 @@ module.exports = {
           path.join(outputPath, 'Voidr Capture.app'),
         ]);
       }
+    },
+    postMake: async (_forgeConfig, makeResults) => {
+      if (!publicRelease || !appleNotarization) return makeResults;
+
+      for (const result of makeResults) {
+        if (result.platform !== 'darwin') continue;
+        for (const artifact of result.artifacts) {
+          if (path.extname(artifact).toLowerCase() !== '.dmg') continue;
+          await notarize({ appPath: artifact, ...appleNotarization });
+        }
+      }
+
+      return makeResults;
     },
   },
   plugins: [
@@ -72,11 +113,34 @@ module.exports = {
   ],
   makers: [
     { name: '@electron-forge/maker-zip', platforms: ['darwin', 'linux', 'win32'] },
-    { name: '@electron-forge/maker-dmg', config: { format: 'ULFO' } },
+    {
+      name: '@electron-forge/maker-dmg',
+      config: {
+        format: 'ULFO',
+        ...(appleSigningIdentity
+          ? {
+              'code-sign': {
+                'signing-identity': appleSigningIdentity,
+                identifier: 'co.voidr.capture.installer',
+              },
+            }
+          : {}),
+      },
+    },
     {
       name: '@electron-forge/maker-squirrel',
       config: { name: 'voidr_capture', authors: 'Voidr' },
     },
-    { name: '@electron-forge/maker-deb', config: { options: { categories: ['Development'] } } },
+    {
+      name: '@electron-forge/maker-deb',
+      config: {
+        options: {
+          name: 'voidr-capture',
+          productName: 'Voidr Capture',
+          bin: 'Voidr Capture',
+          categories: ['Development'],
+        },
+      },
+    },
   ],
 };

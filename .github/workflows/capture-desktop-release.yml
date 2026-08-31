@@ -1,0 +1,127 @@
+name: Capture Desktop release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'capture-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    env:
+      VOIDR_PUBLIC_RELEASE: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [[ "${GITHUB_REF_NAME}" != "capture-v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${version}." >&2
+            exit 1
+          fi
+
+      - name: Validate release credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            APPLE_CODESIGN_IDENTITY
+            APPLE_ID
+            APPLE_APP_SPECIFIC_PASSWORD
+            APPLE_TEAM_ID
+            MACOS_CERTIFICATE_P12_BASE64
+            MACOS_CERTIFICATE_PASSWORD
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required release secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare signing and notarization keychain
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate_path="${RUNNER_TEMP}/voidr-capture-certificate.p12"
+          keychain_path="${RUNNER_TEMP}/voidr-capture-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          notary_profile="voidr-capture-ci"
+
+          echo "::add-mask::${keychain_password}"
+          printf '%s' "${MACOS_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}"
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" \
+            -P "${MACOS_CERTIFICATE_PASSWORD}" \
+            -A -t cert -f pkcs12 -k "${keychain_path}"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "${keychain_password}" \
+            "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}"
+
+          xcrun notarytool store-credentials "${notary_profile}" \
+            --apple-id "${APPLE_ID}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --keychain "${keychain_path}"
+
+          echo "APPLE_NOTARY_KEYCHAIN_PROFILE=${notary_profile}" >> "${GITHUB_ENV}"
+          echo "APPLE_NOTARY_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
+
+      - run: npm ci
+      - run: npm run capture:typecheck
+      - run: npm run test:capture
+      - run: npm run make --workspace @voidr/capture-desktop -- --arch=arm64
+
+      - name: Verify signed and notarized artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find desktop/out -type d -name 'Voidr Capture.app' -print -quit)"
+          dmg_path="$(find desktop/out/make -type f -name '*.dmg' -print -quit)"
+          test -n "${app_path}"
+          test -n "${dmg_path}"
+
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+          spctl --assess --type execute --verbose=4 "${app_path}"
+          xcrun stapler validate "${app_path}"
+          codesign --verify --strict --verbose=2 "${dmg_path}"
+          xcrun stapler validate "${dmg_path}"
+
+      - name: Prepare private-bucket release bundle
+        run: node desktop/scripts/prepare-release.mjs --platform=mac --arch=arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voidr-capture-macos-arm64-signed
+          path: desktop/out/release/capture/**
+          if-no-files-found: error
+          retention-days: 14

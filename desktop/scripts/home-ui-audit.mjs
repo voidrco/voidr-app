@@ -9,6 +9,7 @@ const directory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(directory, '..');
 const screenshotPath = process.env.VOIDR_HOME_AUDIT_SCREENSHOT ?? '/tmp/voidr-desktop-home.png';
 const debuggingPort = Number(process.env.VOIDR_HOME_AUDIT_PORT ?? 9341);
+const auditMode = process.env.VOIDR_HOME_AUDIT_MODE === 'connect' ? 'connect' : 'workspace';
 const electronBinary = createRequire(import.meta.url)('electron');
 const auditUserDataDirectory = await mkdtemp(resolve(tmpdir(), 'voidr-home-audit-'));
 
@@ -99,14 +100,16 @@ try {
   client = new DevToolsClient(target.webSocketDebuggerUrl);
   const audit = await waitFor(async () => {
     const value = await client.evaluate(`(()=>{
+      const auditMode=${JSON.stringify(auditMode)};
       const home=document.querySelector('.workspace-home');
+      const connect=document.querySelector('.workspace-connect');
       const rows=[...document.querySelectorAll('.workspace-loop-row')];
       const selected=document.querySelector('.workspace-loop-row.active');
       const cycleRows=[...document.querySelectorAll('.workspace-cycle-row')];
       const selectedTest=document.querySelector('.workspace-cycle-row.active');
       const evidenceRows=[...document.querySelectorAll('.workspace-evidence-list article')];
       const technical=document.querySelector('.workspace-technical-signals');
-      if(!home||!selected||!cycleRows.length) return null;
+      if(!home||(auditMode==='workspace'&&(!selected||!cycleRows.length))) return null;
       const rect=home.getBoundingClientRect();
       const labels=[...document.querySelectorAll('button')]
         .map((element)=>element.textContent?.trim())
@@ -114,6 +117,10 @@ try {
       return {
         viewport:{width:innerWidth,height:innerHeight},
         home:{width:Math.round(rect.width),height:Math.round(rect.height)},
+        connect:Boolean(connect),
+        connectTitle:connect?.querySelector('h1')?.textContent?.trim(),
+        connectAction:[...document.querySelectorAll('button')]
+          .find((element)=>element.textContent?.trim()==='Abrir a Voidr')?.textContent?.trim(),
         loops:rows.length,
         tests:cycleRows.length,
         evidence:evidenceRows.length,
@@ -122,7 +129,7 @@ try {
           [...document.querySelectorAll('.workspace-evidence-list article strong')]
             .find((element)=>element.textContent?.trim()==='Replay do teste')
         ),
-        selectedLoop:selected.textContent?.replace(/\\s+/g,' ').trim(),
+        selectedLoop:selected?.textContent?.replace(/\\s+/g,' ').trim(),
         actions:labels.filter((label)=>['Fazer meu teste','Abrir teste','Revisar teste'].includes(label)),
         technicalSignalsCollapsed:Boolean(technical&&!technical.hasAttribute('open')),
         duplicateWorkspaceHeading:Boolean(document.querySelector('.workspace-heading')),
@@ -130,19 +137,27 @@ try {
         internalCopy:/\\b(?:VAP|Mongo|ClickHouse|object storage|signed URL|harnessDelivery|Cycle|Ciclo)\\b/i.test(document.body.innerText),
       };
     })()`);
-    return value?.tests ? value : undefined;
+    return auditMode === 'connect'
+      ? value?.connect ? value : undefined
+      : value?.tests ? value : undefined;
   });
   const screenshot = await client.call('Page.captureScreenshot', { format: 'png' });
   await writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'));
   if (audit.horizontalOverflow) throw new Error('A Home criou overflow horizontal global.');
-  if (audit.internalCopy) throw new Error('A Home expôs copy interna de implementação.');
-  if (audit.selectedTest?.includes('Em teste') && audit.replayVisible) {
-    throw new Error('A Home afirmou que existe replay antes da captura terminar.');
+  if (auditMode === 'connect') {
+    if (audit.connectTitle !== 'Conecte seu workspace' || audit.connectAction !== 'Abrir a Voidr') {
+      throw new Error('A primeira abertura não apresentou uma conexão de workspace acionável.');
+    }
+  } else {
+    if (audit.internalCopy) throw new Error('A Home expôs copy interna de implementação.');
+    if (audit.selectedTest?.includes('Em teste') && audit.replayVisible) {
+      throw new Error('A Home afirmou que existe replay antes da captura terminar.');
+    }
+    if (audit.duplicateWorkspaceHeading) throw new Error('A Home repetiu o título da área de trabalho.');
+    if (!audit.technicalSignalsCollapsed) throw new Error('Sinais técnicos competem com o feedback principal.');
+    if (!audit.actions.includes('Fazer meu teste')) throw new Error('A ação primária não está visível.');
   }
-  if (audit.duplicateWorkspaceHeading) throw new Error('A Home repetiu o título da área de trabalho.');
-  if (!audit.technicalSignalsCollapsed) throw new Error('Sinais técnicos competem com o feedback principal.');
-  if (!audit.actions.includes('Fazer meu teste')) throw new Error('A ação primária não está visível.');
-  process.stdout.write(`${JSON.stringify({ ok: true, screenshotPath, ...audit }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, mode: auditMode, screenshotPath, ...audit }, null, 2)}\n`);
 } finally {
   client?.close();
   child.kill('SIGTERM');

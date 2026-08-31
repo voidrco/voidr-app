@@ -282,11 +282,11 @@ export class VoidrServiceClient {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
   }
 
-  async listLoops(): Promise<DesktopLoopSummary[]> {
+  async listLoops(remoteAccessToken?: string): Promise<DesktopLoopSummary[]> {
     const values = await jsonRequest<unknown[]>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}`,
       {
-        headers: this.localHeaders(),
+        headers: this.workspaceHeaders(remoteAccessToken),
       },
     );
     return values.map((value) => {
@@ -340,11 +340,14 @@ export class VoidrServiceClient {
     });
   }
 
-  async listLoopCycles(loopId: string): Promise<DesktopLoopCycleSummary[]> {
+  async listLoopCycles(
+    loopId: string,
+    remoteAccessToken?: string,
+  ): Promise<DesktopLoopCycleSummary[]> {
     const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
     const values = await jsonRequest<unknown[]>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}/cycles`,
-      { headers: this.localHeaders() },
+      { headers: this.workspaceHeaders(remoteAccessToken) },
     );
     return values.map((value) => {
       const item = record(value);
@@ -374,13 +377,14 @@ export class VoidrServiceClient {
   async getLoopCycle(
     loopId: string,
     cycleId: string,
+    remoteAccessToken?: string,
   ): Promise<DesktopLoopCycleDetail> {
     const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
     const safeCycleId = z.string().uuid().parse(cycleId);
     const value = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}` +
         `/cycles/${encodeURIComponent(safeCycleId)}`,
-      { headers: this.localHeaders() },
+      { headers: this.workspaceHeaders(remoteAccessToken) },
     );
     const context = record(value.context);
     const counts = record(context.counts);
@@ -433,13 +437,19 @@ export class VoidrServiceClient {
     });
   }
 
-  async prepareLoopCycle(loopId: string): Promise<DesktopCaptureLaunch> {
+  async prepareLoopCycle(
+    loopId: string,
+    remoteAccessToken?: string,
+  ): Promise<DesktopCaptureLaunch> {
     const safeLoopId = z.string().trim().min(1).max(200).parse(loopId);
     const value = await jsonRequest<Json>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(safeLoopId)}/capture`,
       {
         method: "POST",
-        headers: { ...this.localHeaders(), "Content-Type": "application/json" },
+        headers: {
+          ...this.workspaceHeaders(remoteAccessToken),
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -753,6 +763,14 @@ export class VoidrServiceClient {
       "x-voidr-dev-key": this.runtime.localDevKey,
       "x-voidr-organization-id": organizationId,
     };
+  }
+
+  private workspaceHeaders(remoteAccessToken?: string): Record<string, string> {
+    if (this.runtime.localAdapter) return this.localHeaders();
+    if (!remoteAccessToken) {
+      throw new Error('Conecte sua conta Voidr antes de carregar este workspace.');
+    }
+    return { Authorization: `Bearer ${remoteAccessToken}` };
   }
 
   private loopRoot(): string {

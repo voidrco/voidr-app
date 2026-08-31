@@ -35,6 +35,12 @@ html[data-platform='darwin'] .capture-topbar > .vdr-brand { margin-left: 96px; }
 .capture-first-steps p { margin: 0; color: var(--text-tertiary); font-size: var(--text-2xs); line-height: 1.45; }
 
 .workspace-home { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 18px; }
+.workspace-connect { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 40px; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--background-elevated); box-shadow: var(--shadow-panel); text-align: center; }
+.workspace-connect-icon { width: 48px; height: 48px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-color); border-radius: var(--radius-lg); color: var(--text-secondary); background: var(--background); }
+.workspace-connect > div { max-width: 460px; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.workspace-connect > div > span { color: var(--text-quaternary); font: 500 9px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.workspace-connect h1 { margin: 0; color: var(--text-primary); font-size: var(--text-lg); font-weight: 500; }
+.workspace-connect p { margin: 0; color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.55; }
 .workspace-error { min-height: 38px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-bottom: 10px; padding: 0 11px; border: 1px solid var(--color-error-border); border-radius: var(--radius-md); color: var(--color-error-light); background: var(--color-error-surface); font-size: var(--text-2xs); }
 .workspace-error button { border: 0; color: inherit; background: transparent; font-weight: 500; cursor: pointer; }
 .workspace-surface { min-height: 0; flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--background-elevated); box-shadow: var(--shadow-panel); }

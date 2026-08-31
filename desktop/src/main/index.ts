@@ -19,6 +19,7 @@ import { VoidrServiceClient } from './service-client';
 import { LoopParticipantAuthSession } from './loop-participant-auth';
 import { WebCaptureController } from './web-capture-controller';
 import { parseDesktopCaptureLaunch } from './deep-link';
+import { createWorkspaceSession, workspacePlatformLoopsUrl } from './workspace-session';
 
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
@@ -400,22 +401,34 @@ function registerIpc(): void {
   });
   ipcMain.handle('workspace:list-loops', async (event, runtime) => {
     assertControlSender(event);
-    return new VoidrServiceClient(localRuntimeConfigSchema.parse(runtime)).listLoops();
+    const workspace = await createWorkspaceSession(runtime, loopParticipantAuth);
+    return workspace.client.listLoops(workspace.accessToken);
   });
   ipcMain.handle('workspace:list-cycles', async (event, input) => {
     assertControlSender(event);
     const parsed = workspaceLoopInputSchema.parse(input);
-    return new VoidrServiceClient(parsed.runtime).listLoopCycles(parsed.loopId);
+    const workspace = await createWorkspaceSession(parsed.runtime, loopParticipantAuth);
+    return workspace.client.listLoopCycles(parsed.loopId, workspace.accessToken);
   });
   ipcMain.handle('workspace:get-cycle', async (event, input) => {
     assertControlSender(event);
     const parsed = workspaceCycleInputSchema.parse(input);
-    return new VoidrServiceClient(parsed.runtime).getLoopCycle(parsed.loopId, parsed.cycleId);
+    const workspace = await createWorkspaceSession(parsed.runtime, loopParticipantAuth);
+    return workspace.client.getLoopCycle(
+      parsed.loopId,
+      parsed.cycleId,
+      workspace.accessToken,
+    );
   });
   ipcMain.handle('workspace:start-cycle', async (event, input) => {
     assertControlSender(event);
     const parsed = workspaceLoopInputSchema.parse(input);
-    return new VoidrServiceClient(parsed.runtime).prepareLoopCycle(parsed.loopId);
+    const workspace = await createWorkspaceSession(parsed.runtime, loopParticipantAuth);
+    return workspace.client.prepareLoopCycle(parsed.loopId, workspace.accessToken);
+  });
+  ipcMain.handle('workspace:open-platform', async (event, runtime) => {
+    assertControlSender(event);
+    await shell.openExternal(workspacePlatformLoopsUrl(runtime));
   });
   ipcMain.handle('mobile:devices', async (event) => {
     assertControlSender(event);
