@@ -63,6 +63,27 @@ describe('workspace session', () => {
     );
   });
 
+  it('trusts the explicit staging service and platform pair', async () => {
+    const accessToken = vi.fn().mockResolvedValue('staging-access-token');
+    const stagingRuntime = {
+      ...remoteRuntime,
+      serviceUrl: 'https://api-staging.voidr.co/v1',
+      platformUrl: 'https://platform-staging.voidr.co',
+      organizationId: 'org_XpZs54aP8Oop8qUz',
+    };
+
+    const session = await createWorkspaceSession(stagingRuntime, { accessToken });
+
+    expect(session.accessToken).toBe('staging-access-token');
+    expect(accessToken).toHaveBeenCalledWith(
+      'organization',
+      'org_XpZs54aP8Oop8qUz',
+    );
+    expect(workspacePlatformLoopsUrl(stagingRuntime)).toBe(
+      'https://platform-staging.voidr.co/loops',
+    );
+  });
+
   it('rejects a remote endpoint before requesting a bearer token', async () => {
     const accessToken = vi.fn().mockResolvedValue('access-token');
 
