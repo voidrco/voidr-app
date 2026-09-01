@@ -7,7 +7,10 @@ Este documento define o comportamento de produto para notas no Voidr Capture. O 
 - Selecionar algo nunca cria evidência. A evidência existe somente depois de uma nota não vazia ser salva com sucesso.
 - `Esc` é sempre seguro: cancela a etapa atual, nunca salva e nunca incrementa o contador.
 - Voltar preserva o rascunho; fechar explicitamente descarta o rascunho.
-- Uma falha de captura ou rede devolve a pessoa ao mesmo composer, com texto e seleção disponíveis para tentar novamente.
+- Uma falha de captura ou armazenamento local devolve a pessoa ao mesmo composer, com texto e seleção disponíveis para tentar novamente.
+- Depois da confirmação, texto e imagens são criptografados e gravados atomicamente no dispositivo antes da UI responder.
+- Rede nunca bloqueia o restante do teste: a sincronização usa uma fila idempotente em background e mantém um estado visível enquanto estiver pendente.
+- Finalizar drena a fila antes de selar. Se a API estiver indisponível, a finalização fica recuperável e a cópia local não é apagada.
 - Durante o salvamento, a ação é single-flight: duplo clique, `Enter` repetido ou dois eventos concorrentes produzem uma única anotação.
 - O site capturado e o controle desktop obedecem ao mesmo contrato de teclado.
 
@@ -21,7 +24,7 @@ ESCOLHENDO ── Tela ───────────────► ESCREVEN
    │                                  │
    ├─ Elemento/Região ─► SELECIONANDO │ Salvar
    │                         │         ▼
-   │                    seleção     SALVANDO ── sucesso ─► FECHADO
+   │                    seleção     PROTEGENDO LOCALMENTE ── sucesso ─► FECHADO + SINCRONIZANDO
    │                         ▼         │
    └◄──── Esc/Cancelar ── ESCREVENDO ◄─┘ falha
               ▲               │
@@ -50,14 +53,16 @@ ESCOLHENDO ── Tela ───────────────► ESCREVEN
 | Salvar nota vazia | A ação permanece desabilitada. `Enter` não faz nada. |
 | `Enter` | Salva; `Shift+Enter` cria uma nova linha. |
 | Duplo clique/`Enter` repetido | Apenas um salvamento é iniciado. |
-| Falha ao salvar | Reabre o composer com o mesmo texto e alvo para tentar novamente. |
-| Sucesso ao salvar | Incrementa Notas uma vez, mostra confirmação e limpa o estado efêmero. |
+| Falha antes da cópia local | Reabre o composer com o mesmo texto e alvo para tentar novamente. |
+| Cópia local confirmada | Incrementa Notas uma vez, fecha o composer e permite continuar imediatamente. |
+| Falha de rede após a cópia local | Mantém a nota criptografada no dispositivo, mostra o estado pendente e tenta novamente com a mesma chave idempotente. |
+| Sincronização concluída | Remove somente o item local já confirmado pela API e informa que todas as notas estão sincronizadas. |
 | Abrir Evidências durante uma nota vazia | Fecha a nota e abre Evidências. |
 | Tentar finalizar com rascunho escrito | Mantém o composer e pede para salvar ou descartar; nada é perdido silenciosamente. |
 | Finalizar sem rascunho | Cancela seleção vazia, limpa overlays e finaliza normalmente. |
 | Minimizar ou trocar de app | Preserva seleção/composer/rascunho. |
 | Fechar a janela durante gravação | Oculta sem destruir a captura; reabrir restaura o mesmo ciclo e estado. |
-| Encerrar o processo ou reiniciar a máquina | Rascunhos e seleções não salvos são efêmeros; evidências já confirmadas permanecem duráveis. |
+| Encerrar o processo ou reiniciar a máquina | Rascunhos e seleções não confirmados são efêmeros; notas já protegidas localmente permanecem na fila criptografada e retomam a sincronização. |
 | Navegar/recarregar o site durante o composer | Volta ao seletor, explica que a página mudou e preserva o rascunho; Elemento/Região precisam ser escolhidos novamente. |
 | A gravação terminar por outro caminho | Fecha a UI de nota e remove qualquer seleção efêmera. |
 
@@ -69,7 +74,7 @@ ESCOLHENDO ── Tela ───────────────► ESCREVEN
 | Região | obrigatório | sim | sim, quando disponível | não |
 | Elemento | obrigatório | sim | sim, quando disponível | sim, quando disponível |
 
-O screenshot completo e a anotação textual continuam úteis se o recorte não puder ser produzido. Falhas antes da anotação durável não alteram o contador local.
+O screenshot completo e a anotação textual continuam úteis se o recorte não puder ser produzido. Falhas antes da cópia local durável não alteram o contador. O item da fila só é removido depois que assets e anotação foram aceitos pelo Service.
 
 ## Critérios de aceite E2E
 
@@ -79,3 +84,6 @@ O screenshot completo e a anotação textual continuam úteis se o recorte não 
 4. Elemento, Região e Tela persistem somente depois de confirmação explícita.
 5. Região e Elemento persistem screenshot completo e recorte.
 6. Depois de salvar, cancelar ou finalizar, o viewport retorna ao tamanho padrão e nenhum overlay fica ativo.
+7. Uma falha de rede mantém a nota no outbox criptografado e o retry reutiliza a mesma chave idempotente.
+8. Uma nota criada enquanto outra sincroniza também é drenada, sem depender de nova interação.
+9. Finalizar nunca sela o ciclo com notas ainda pendentes; a tentativa continua recuperável.

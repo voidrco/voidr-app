@@ -599,7 +599,10 @@ export class VoidrServiceClient {
           ?.lifecycleVersion,
     );
     if (Number.isInteger(lifecycleVersion) && lifecycleVersion >= 0) {
-      authorization.safeContext.lifecycleVersion = lifecycleVersion;
+      authorization.safeContext.lifecycleVersion = Math.max(
+        authorization.safeContext.lifecycleVersion,
+        lifecycleVersion,
+      );
     }
     return result;
   }

@@ -73,6 +73,29 @@ describe("VoidrServiceClient", () => {
     });
   });
 
+  it("never regresses lifecycle state when concurrent responses arrive out of order", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { lifecycleVersion: 3 } }), {
+        status: 200,
+      }),
+    );
+    const authorization = {
+      verificationToken: "verification-capability",
+      safeContext: {
+        verificationId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+        lifecycleVersion: 5,
+      },
+    } as never;
+
+    await new VoidrServiceClient(runtime).verificationIngest(
+      authorization,
+      "annotations",
+      {},
+    );
+
+    expect((authorization as { safeContext: { lifecycleVersion: number } }).safeContext.lifecycleVersion).toBe(5);
+  });
+
   it("reduces Loop workspace responses to safe renderer projections", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);

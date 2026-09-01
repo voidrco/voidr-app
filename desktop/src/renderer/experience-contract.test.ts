@@ -10,6 +10,10 @@ const mainSource = readFileSync(
   fileURLToPath(new URL("../main/index.ts", import.meta.url)),
   "utf8",
 );
+const preloadSource = readFileSync(
+  fileURLToPath(new URL("../preload/control.ts", import.meta.url)),
+  "utf8",
+);
 const workspaceSource = readFileSync(
   fileURLToPath(new URL("./WorkspaceHome.tsx", import.meta.url)),
   "utf8",
@@ -239,7 +243,10 @@ describe("desktop experience contract", () => {
       "Inclua esperado × observado quando ajudar · Enter salva",
     );
     expect(appSource).toContain("Salvar anotação");
-    expect(appSource).toContain("disabled={busy || !note.trim()}");
+    expect(appSource).toContain("disabled={busy || annotationSaving || !note.trim()}");
+    expect(appSource).toContain("Você pode continuar o teste enquanto sincronizamos em segundo plano.");
+    expect(appSource).toContain("Nota protegida neste dispositivo");
+    expect(preloadSource).toContain("onAnnotationSync");
     expect(appSource).toContain("capture.clearSelection()");
     expect(appSource).toContain("Cancelar seleção");
     expect(appSource).toContain("capture.onSelectionCancelled");

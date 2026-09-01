@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
 import { z } from 'zod';
 import { buildLoopCodeHandoffUrl, loopCodeHandoffInputSchema } from './code-handoff';
 import {
@@ -19,6 +19,7 @@ import { VoidrServiceClient } from './service-client';
 import { LoopParticipantAuthSession } from './loop-participant-auth';
 import { WebCaptureController } from './web-capture-controller';
 import { parseDesktopCaptureLaunch } from './deep-link';
+import { AnnotationOutbox } from './annotation-outbox';
 
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
@@ -68,6 +69,12 @@ if (app.isPackaged) {
 }
 
 const openCycleSchema = loopCodeHandoffInputSchema;
+
+function durableEncryptionAvailable(): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  return process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text';
+}
+
 const verificationIdInputSchema = z.object({
   runtime: localRuntimeConfigSchema,
   verificationId: z.string().uuid(),
@@ -249,6 +256,10 @@ function registerIpc(): void {
   ipcMain.handle('capture:status', (event) => {
     assertControlSender(event);
     return webCapture?.status;
+  });
+  ipcMain.handle('capture:annotation-status', (event) => {
+    assertControlSender(event);
+    return webCapture?.annotationPendingCount() ?? 0;
   });
   ipcMain.handle('capture:pending-launch', (event) => {
     assertControlSender(event);
@@ -510,9 +521,24 @@ async function createWindow(): Promise<void> {
     },
   });
   const ledger = new CaptureLedger(app.getPath('userData'));
+  const annotationOutbox = new AnnotationOutbox(app.getPath('userData'), {
+    encrypt(value) {
+      if (!durableEncryptionAvailable()) {
+        throw new Error('O armazenamento seguro do sistema ainda não está disponível. Tente salvar novamente.');
+      }
+      return safeStorage.encryptString(value);
+    },
+    decrypt(value) {
+      if (!durableEncryptionAvailable()) {
+        throw new Error('O armazenamento seguro do sistema ainda não está disponível.');
+      }
+      return safeStorage.decryptString(value);
+    },
+  });
   webCapture = new WebCaptureController(
     mainWindow,
     ledger,
+    annotationOutbox,
     (status) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('capture:status-changed', status);
@@ -565,6 +591,7 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadURL(`${CONTROL_ORIGIN}/index.html`);
   }
+  void webCapture?.recoverPendingAnnotations();
 }
 
 function registerProtocol(): void {

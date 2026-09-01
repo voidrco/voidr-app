@@ -27,6 +27,11 @@ type SelectionEvent = {
   selectionId?: number;
   previousSelectionId?: number;
 };
+type AnnotationSyncEvent = {
+  state: 'queued' | 'synced' | 'pending';
+  localId: string;
+  pendingCount: number;
+};
 
 const invokeStatus = (channel: string, input?: unknown): Promise<CaptureStatus> =>
   ipcRenderer.invoke(channel, ...(input === undefined ? [] : [input])).then((value) =>
@@ -66,6 +71,10 @@ export interface CaptureLaunchAcceptance {
 const api = {
   capture: {
     status: (): Promise<CaptureStatus> => invokeStatus('capture:status'),
+    annotationStatus: (): Promise<{ pendingCount: number }> =>
+      ipcRenderer.invoke('capture:annotation-status').then((value) => ({
+        pendingCount: z.number().int().nonnegative().parse(value),
+      })),
     pendingLaunch: (): Promise<DesktopCaptureLaunch | null> =>
       ipcRenderer.invoke('capture:pending-launch').then((value) =>
         value == null ? null : desktopCaptureLaunchSchema.parse(value),
@@ -132,6 +141,11 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, input: SelectionEvent) => callback(input);
       ipcRenderer.on('capture:selection-cancelled', listener);
       return () => ipcRenderer.removeListener('capture:selection-cancelled', listener);
+    },
+    onAnnotationSync: (callback: (input: AnnotationSyncEvent) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, input: AnnotationSyncEvent) => callback(input);
+      ipcRenderer.on('capture:annotation-sync', listener);
+      return () => ipcRenderer.removeListener('capture:annotation-sync', listener);
     },
     onLaunch: (callback: (launch: DesktopCaptureLaunch) => void): Unsubscribe => {
       const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {

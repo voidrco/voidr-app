@@ -161,6 +161,7 @@ function App() {
   const [annotationFlow, setAnnotationFlow] = useState(initialAnnotationFlow);
   const [evidenceOpen, setEvidenceOpen] = useState<CapturedSignalCategory>();
   const [annotationNotice, setAnnotationNotice] = useState<AnnotationNotice>();
+  const [pendingAnnotations, setPendingAnnotations] = useState(0);
   const [voiceFlow, setVoiceFlow] = useState(initialVoiceFlow);
   const [voiceVisualFlow, setVoiceVisualFlow] = useState(initialVoiceVisualFlow);
   const [voiceElapsedMs, setVoiceElapsedMs] = useState(0);
@@ -212,6 +213,7 @@ function App() {
   const harnessDeliveryState = status.context?.harnessDeliveryState;
   const currentAnnotationKind = annotationKind(annotationFlow);
   const annotationActive = annotationIsActive(annotationFlow);
+  const annotationSaving = annotationFlow.phase === 'saving';
   const noteOpen = annotationFlow.phase === 'choosing' || annotationFlow.phase === 'composing';
   const note = annotationFlow.note;
   const voicePanelOpen = voiceFlow.phase !== 'idle';
@@ -367,6 +369,40 @@ function App() {
 
   useEffect(() => () => {
     if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
+  }, []);
+
+  useEffect(() => window.voidrCapture.capture.onAnnotationSync((event) => {
+    setPendingAnnotations(event.pendingCount);
+    if (annotationNoticeTimer.current) window.clearTimeout(annotationNoticeTimer.current);
+    if (event.state === 'synced') {
+      setAnnotationNotice({
+        tone: 'success',
+        kind: 'screen',
+        active: false,
+        title: event.pendingCount > 0 ? 'Nota sincronizada' : 'Todas as notas estão sincronizadas',
+        message: event.pendingCount > 0
+          ? `${event.pendingCount} ${event.pendingCount === 1 ? 'nota continua protegida' : 'notas continuam protegidas'} neste dispositivo.`
+          : 'A captura e o texto já estão seguros na versão do teste.',
+      });
+      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 2_800);
+      return;
+    }
+    if (event.state === 'pending') {
+      setAnnotationNotice({
+        tone: 'info',
+        kind: 'screen',
+        active: false,
+        title: 'Nota protegida neste dispositivo',
+        message: 'A sincronização será retomada automaticamente quando a conexão responder.',
+      });
+      annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 8_000);
+    }
+  }), []);
+
+  useEffect(() => {
+    void window.voidrCapture.capture.annotationStatus()
+      .then(({ pendingCount }) => setPendingAnnotations(pendingCount))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -548,12 +584,12 @@ function App() {
     const suppliedNote = flow.note.trim();
     annotationSaveInFlight.current = true;
     transitionAnnotation({ type: 'SAVE_STARTED' });
-    setBusy(true);
     setAnnotationNotice({
       tone: 'info',
       kind,
       active: true,
-      title: 'Salvando anotação',
+      title: 'Protegendo anotação',
+      message: 'Guardando uma cópia local antes de sincronizar.',
     });
     try {
       await window.voidrCapture.capture.setControlPanel('default');
@@ -563,8 +599,8 @@ function App() {
         tone: 'success',
         kind,
         active: false,
-        title: 'Anotação salva',
-        message: 'A nota e a captura foram adicionadas ao teste.',
+        title: 'Anotação protegida',
+        message: 'Você pode continuar o teste enquanto sincronizamos em segundo plano.',
       });
       annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 2_200);
     } catch (error) {
@@ -580,7 +616,6 @@ function App() {
       annotationNoticeTimer.current = window.setTimeout(() => setAnnotationNotice(undefined), 6_000);
     } finally {
       annotationSaveInFlight.current = false;
-      setBusy(false);
     }
   };
 
@@ -1390,11 +1425,17 @@ function App() {
               ))}
             </div>
           )}
+          {recording && pendingAnnotations > 0 && (
+            <div className="annotation-sync-state" role="status" aria-live="polite">
+              <Loader2 className="spin" size={12} />
+              <span>{pendingAnnotations === 1 ? '1 nota protegida · sincronizando' : `${pendingAnnotations} notas protegidas · sincronizando`}</span>
+            </div>
+          )}
           <div className="dock-actions">
             {status.stage === 'ready' && <Button size="sm" variant="primary" icon={<Play size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.startWeb(); })}>Iniciar captura</Button>}
-            {recording && <Button data-annotation-trigger size="sm" variant={annotationFlow.phase === 'selecting' ? 'secondary' : annotationActive ? 'primary' : 'secondary'} icon={annotationFlow.phase === 'selecting' ? <X size={13} /> : <MessageSquare size={13} />} disabled={busy} onClick={() => void toggleAnnotationPanel()}>{annotationFlow.phase === 'selecting' ? 'Cancelar seleção' : 'Nota'}</Button>}
-            {recording && <Button size="sm" variant={voiceFlow.phase === 'recording' ? 'danger' : 'secondary'} icon={voiceFlow.phase === 'recording' ? <Square size={12} /> : <Mic size={13} />} disabled={busy || ['requesting', 'stopping', 'sending'].includes(voiceFlow.phase)} onClick={() => void toggleVoiceWithAnnotationCleanup()}>{voiceFlow.phase === 'recording' ? 'Parar' : 'Voz'}</Button>}
-            {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy} onClick={() => void finalizeCapture()}>Finalizar</Button>}
+            {recording && <Button data-annotation-trigger size="sm" variant={annotationFlow.phase === 'selecting' ? 'secondary' : annotationActive ? 'primary' : 'secondary'} icon={annotationFlow.phase === 'selecting' ? <X size={13} /> : <MessageSquare size={13} />} disabled={busy || annotationSaving} onClick={() => void toggleAnnotationPanel()}>{annotationFlow.phase === 'selecting' ? 'Cancelar seleção' : 'Nota'}</Button>}
+            {recording && <Button size="sm" variant={voiceFlow.phase === 'recording' ? 'danger' : 'secondary'} icon={voiceFlow.phase === 'recording' ? <Square size={12} /> : <Mic size={13} />} disabled={busy || annotationSaving || ['requesting', 'stopping', 'sending'].includes(voiceFlow.phase)} onClick={() => void toggleVoiceWithAnnotationCleanup()}>{voiceFlow.phase === 'recording' ? 'Parar' : 'Voz'}</Button>}
+            {recording && <Button size="sm" variant="primary" icon={<Square size={12} />} disabled={busy || annotationSaving} onClick={() => void finalizeCapture()}>Finalizar</Button>}
             {status.stage === 'recoverable_error' && <Button size="sm" variant="primary" icon={<RefreshCw size={13} />} disabled={busy} onClick={() => run(async () => { await window.voidrCapture.capture.stopWeb(); })}>Tentar novamente</Button>}
             {['processing', 'ready_for_review'].includes(status.stage) && status.context && <Button size="sm" variant="primary" icon={<ExternalLink size={13} />} onClick={() => void window.voidrCapture.openCycle({ platformUrl: runtime.platformUrl, loopId: status.context!.scenarioId, cycleId: status.context!.cycleId, destination: 'consolidated', agent: 'codex' })}>Consolidar e resolver</Button>}
             {status.stage === 'ready_for_review' && <Button size="sm" variant="ghost" icon={<RotateCcw size={13} />} onClick={() => run(async () => { await window.voidrCapture.capture.reset(); })}>Nova captura</Button>}
@@ -1434,7 +1475,7 @@ function App() {
                   />
                   <div className="annotation-composer-actions">
                     <span>Inclua esperado × observado quando ajudar · Enter salva</span>
-                    <Button size="sm" variant="primary" disabled={busy || !note.trim()} onClick={() => void saveAnnotation()}>
+                    <Button size="sm" variant="primary" disabled={busy || annotationSaving || !note.trim()} onClick={() => void saveAnnotation()}>
                       Salvar anotação
                     </Button>
                   </div>

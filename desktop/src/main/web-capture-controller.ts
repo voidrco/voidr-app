@@ -37,6 +37,7 @@ import {
   VoidrServiceClient,
 } from './service-client';
 import { inspectCollectorStopAttempt } from './collector-stop';
+import { AnnotationOutbox, type DurableAnnotation } from './annotation-outbox';
 
 const COLLECTOR_WORLD = 1004;
 const REGION_SELECTION_WORLD = 1005;
@@ -46,6 +47,7 @@ const COLLECTOR_STOP_TIMEOUT_MS = 25_000;
 const COLLECTOR_STOP_MAX_ATTEMPTS = 3;
 const COLLECTOR_STOP_RETRY_DELAY_MS = 500;
 const COLLECTOR_EVENT_WRITE_TIMEOUT_MS = 3_000;
+const ANNOTATION_DRAIN_TIMEOUT_MS = 50_000;
 const CDP_NETWORK_SETTLE_TIMEOUT_MS = 250;
 const CDP_NETWORK_SETTLE_POLL_MS = 20;
 const TARGET_LOAD_TIMEOUT_MS = 15_000;
@@ -178,16 +180,28 @@ export class WebCaptureController {
   #voiceVisualUploads = new Map<string, Promise<VoiceVisualContext>>();
   #targetNavigationEpoch = 0;
   #acknowledgedVoiceSegmentIds = new Set<string>();
+  #annotationRetryTimer?: NodeJS.Timeout;
+  #annotationRetryDelayMs = 2_000;
+  #verificationMutationTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly ledger: CaptureLedger,
+    private readonly annotationOutbox: AnnotationOutbox,
     private readonly emit: (status: CaptureStatus) => void,
     private readonly bounds: () => Rectangle,
     private readonly emitTargetPointerDown: () => void = () => undefined,
     private readonly emitSelectionInvalidated: (event: SelectionEvent) => void = () => undefined,
     private readonly emitSelectionCancelled: (event: SelectionEvent) => void = () => undefined,
   ) {}
+
+  async recoverPendingAnnotations(): Promise<void> {
+    await this.#drainAnnotationOutbox(false);
+  }
+
+  annotationPendingCount(): Promise<number> {
+    return this.annotationOutbox.pendingCount();
+  }
 
   get status(): CaptureStatus {
     const elapsedMs = this.#startedAt ? Math.max(0, Date.now() - this.#startedAt) : 0;
@@ -336,6 +350,14 @@ export class WebCaptureController {
         if (this.#state.stage === 'recording') await this.#settlePendingNetworkRequests();
         this.#setState(captureReducer(this.#state, { type: 'STOP' }));
         this.#stopSignalPolling();
+        const annotationDrain = await withTimeout(
+          this.#drainAnnotationOutbox(false),
+          ANNOTATION_DRAIN_TIMEOUT_MS,
+          'Suas notas continuam protegidas neste dispositivo, mas ainda não terminaram de sincronizar. Tente finalizar novamente.',
+        );
+        if (annotationDrain.pendingCount > 0) {
+          throw new Error('Suas notas continuam protegidas neste dispositivo, mas a sincronização está pendente. Verifique a conexão e tente finalizar novamente.');
+        }
         await withTimeout(
           this.#flushCollectorEventWrites(),
           COLLECTOR_EVENT_WRITE_TIMEOUT_MS,
@@ -392,7 +414,7 @@ export class WebCaptureController {
     throw new Error(lastMessage);
   }
 
-  async annotate(input: unknown): Promise<{ evidenceRef: string }> {
+  async annotate(input: unknown): Promise<{ localId: string; state: 'queued' }> {
     const annotation: AnnotationInput = annotationInputSchema.parse(input);
     if (this.#state.stage !== 'recording' || !this.#view || !this.#authorization || !this.#client) {
       throw new Error('Anotações ficam disponíveis durante a gravação.');
@@ -410,52 +432,36 @@ export class WebCaptureController {
           : 'Selecione uma região antes de salvar a anotação.',
       );
     }
-    const dataBase64 = await this.#captureJpegBase64();
-    const uploaded = await this.#client.verificationIngest(this.#authorization, 'evidence-assets', {
-      generation: this.#authorization.safeContext.verificationGeneration,
-      kind: 'screenshot',
-      contentType: 'image/jpeg',
-      dataBase64,
-    });
-    const evidenceRef = String(uploaded.evidenceRef ?? '');
-    if (!evidenceRef) throw new Error('A evidência não recebeu uma referência durável.');
-
     const viewport = this.#view.getBounds();
-    let cropRef: string | undefined;
     const cropRectangle = selected?.rect ? boundedCaptureRectangle(selected.rect, viewport) : undefined;
-    if (cropRectangle) {
-      try {
-        const cropBase64 = await this.#captureJpegBase64(cropRectangle);
-        const crop = await this.#client.verificationIngest(this.#authorization, 'evidence-assets', {
-          generation: this.#authorization.safeContext.verificationGeneration,
-          kind: 'crop',
-          contentType: 'image/jpeg',
-          dataBase64: cropBase64,
-        });
-        const durableCropRef = String(crop.evidenceRef ?? '');
-        if (durableCropRef) cropRef = durableCropRef;
-      } catch {
-        // A anotação e a captura completa continuam úteis quando o crop não está disponível.
-      }
+    const pageUrl = safePageUrl(this.#view.webContents.getURL());
+    const navigationEpoch = this.#targetNavigationEpoch;
+    const [screenshotBase64, cropBase64] = await Promise.all([
+      this.#captureJpegBase64(),
+      cropRectangle ? this.#captureJpegBase64(cropRectangle).catch(() => undefined) : undefined,
+    ]);
+    if (
+      navigationEpoch !== this.#targetNavigationEpoch ||
+      pageUrl !== safePageUrl(this.#view.webContents.getURL())
+    ) {
+      throw new Error('A página mudou durante a captura. Selecione a área novamente.');
     }
-    await this.#client.verificationIngest(this.#authorization, 'annotations', {
-      version: 'HIL/1',
-      lifecycleVersion: this.#authorization.safeContext.lifecycleVersion,
-      idempotencyKey: `desktop-annotation:${this.#authorization.safeContext.verificationGeneration}:${randomUUID()}`,
-      kind: annotation.kind,
-      note: annotation.note,
-      pageUrl: safePageUrl(this.#view.webContents.getURL()),
-      timestampMs: Math.max(0, Date.now() - this.#startedAt),
-      ...(selected?.selector ? { selector: selected.selector } : {}),
-      ...(selected?.rect ? { rect: selected.rect } : {}),
-      viewport: { width: viewport.width, height: viewport.height },
-      screenshotRef: evidenceRef,
-      ...(cropRef ? { cropRef } : {}),
-    });
-    await this.#trackInCollector('voidr.note', {
-      kind: annotation.kind,
-      evidenceRef,
-      timestampMs: Math.max(0, Date.now() - this.#startedAt),
+    const timestampMs = Math.max(0, Date.now() - this.#startedAt);
+    const queued = await this.annotationOutbox.enqueue({
+      runtime: this.#client.runtime,
+      authorization: structuredClone(this.#authorization),
+      annotation: {
+        idempotencyKey: `desktop-annotation:${this.#authorization.safeContext.verificationGeneration}:${randomUUID()}`,
+        kind: annotation.kind,
+        note: annotation.note,
+        pageUrl,
+        timestampMs,
+        ...(selected?.selector ? { selector: selected.selector } : {}),
+        ...(selected?.rect ? { rect: selected.rect } : {}),
+        viewport: { width: viewport.width, height: viewport.height },
+        screenshotBase64,
+        ...(cropBase64 ? { cropBase64 } : {}),
+      },
     });
     this.#addSignal(
       'notes',
@@ -469,7 +475,9 @@ export class WebCaptureController {
     this.#increment('notes');
     if (annotation.kind === 'element') this.#selectedElement = undefined;
     if (annotation.kind === 'region') this.#selectedRegion = undefined;
-    return { evidenceRef };
+    this.#emitAnnotationSync('queued', queued.localId, await this.annotationOutbox.pendingCount());
+    setTimeout(() => void this.#drainAnnotationOutbox(true), 0);
+    return { localId: queued.localId, state: 'queued' };
   }
 
   async selectElement(): Promise<{ selected: true }> {
@@ -770,21 +778,23 @@ export class WebCaptureController {
     let visual: VoiceVisualContext | undefined;
     let result: Record<string, unknown>;
     try {
-      visual = await this.#voiceVisualContext(
-        input.segmentId,
-        selectedVisual,
-        authorization,
-        client,
-      );
-      result = await client.verificationIngest(authorization, 'voice-segments', {
-        generation: authorization.safeContext.verificationGeneration,
-        segmentId: `desktop-voice-${input.segmentId}`,
-        startedAtMs: input.startedAtMs,
-        endedAtMs: input.endedAtMs,
-        sampleRate: 16_000,
-        language: input.language ?? 'pt-BR',
-        pcmBase64: input.pcmBase64,
-        ...(visual ? { visual } : {}),
+      result = await this.#serializeVerificationMutation(async () => {
+        visual = await this.#voiceVisualContext(
+          input.segmentId,
+          selectedVisual,
+          authorization,
+          client,
+        );
+        return client.verificationIngest(authorization, 'voice-segments', {
+          generation: authorization.safeContext.verificationGeneration,
+          segmentId: `desktop-voice-${input.segmentId}`,
+          startedAtMs: input.startedAtMs,
+          endedAtMs: input.endedAtMs,
+          sampleRate: 16_000,
+          language: input.language ?? 'pt-BR',
+          pcmBase64: input.pcmBase64,
+          ...(visual ? { visual } : {}),
+        });
       });
     } catch (error) {
       if (
@@ -1959,14 +1969,18 @@ export class WebCaptureController {
     payload: Record<string, unknown>,
   ): Promise<void> {
     if (!this.#authorization || !this.#client) return;
-    await this.#client.verificationIngest(this.#authorization, 'lifecycle-events', {
-      version: 'HIL/1',
-      lifecycleVersion: this.#authorization.safeContext.lifecycleVersion,
-      idempotencyKey: `desktop-lifecycle:${type}:${this.#authorization.safeContext.verificationGeneration}`,
-      type,
-      occurredAt: new Date().toISOString(),
-      payload,
-    });
+    const authorization = this.#authorization;
+    const client = this.#client;
+    await this.#serializeVerificationMutation(() =>
+      client.verificationIngest(authorization, 'lifecycle-events', {
+        version: 'HIL/1',
+        lifecycleVersion: authorization.safeContext.lifecycleVersion,
+        idempotencyKey: `desktop-lifecycle:${type}:${authorization.safeContext.verificationGeneration}`,
+        type,
+        occurredAt: new Date().toISOString(),
+        payload,
+      }).then(() => undefined),
+    );
   }
 
   #startSignalPolling(): void {
@@ -2014,6 +2028,108 @@ export class WebCaptureController {
         },
       ])
       .catch(() => undefined);
+  }
+
+  async #uploadAnnotation(item: DurableAnnotation): Promise<void> {
+    await this.#serializeVerificationMutation(async () => {
+      const client = new VoidrServiceClient(item.runtime);
+      const authorization = structuredClone(item.authorization);
+      if (this.#authorization?.safeContext.verificationId === authorization.safeContext.verificationId) {
+        authorization.safeContext.lifecycleVersion = Math.max(
+          authorization.safeContext.lifecycleVersion,
+          this.#authorization.safeContext.lifecycleVersion,
+        );
+      }
+      const screenshot = await client.verificationIngest(authorization, 'evidence-assets', {
+        generation: authorization.safeContext.verificationGeneration,
+        kind: 'screenshot',
+        contentType: 'image/jpeg',
+        dataBase64: item.annotation.screenshotBase64,
+      });
+      const screenshotRef = String(screenshot.evidenceRef ?? '');
+      if (!screenshotRef) throw new Error('A evidência não recebeu uma referência durável.');
+
+      let cropRef: string | undefined;
+      if (item.annotation.cropBase64) {
+        const crop = await client.verificationIngest(authorization, 'evidence-assets', {
+          generation: authorization.safeContext.verificationGeneration,
+          kind: 'crop',
+          contentType: 'image/jpeg',
+          dataBase64: item.annotation.cropBase64,
+        });
+        const durableCropRef = String(crop.evidenceRef ?? '');
+        if (durableCropRef) cropRef = durableCropRef;
+      }
+
+      await client.verificationIngest(authorization, 'annotations', {
+        version: 'HIL/1',
+        lifecycleVersion: authorization.safeContext.lifecycleVersion,
+        idempotencyKey: item.annotation.idempotencyKey,
+        kind: item.annotation.kind,
+        note: item.annotation.note,
+        pageUrl: item.annotation.pageUrl,
+        timestampMs: item.annotation.timestampMs,
+        ...(item.annotation.selector ? { selector: item.annotation.selector } : {}),
+        ...(item.annotation.rect ? { rect: item.annotation.rect } : {}),
+        viewport: item.annotation.viewport,
+        screenshotRef,
+        ...(cropRef ? { cropRef } : {}),
+      });
+
+      if (this.#authorization?.safeContext.verificationId === authorization.safeContext.verificationId) {
+        this.#authorization.safeContext.lifecycleVersion = Math.max(
+          this.#authorization.safeContext.lifecycleVersion,
+          authorization.safeContext.lifecycleVersion,
+        );
+        await this.#trackInCollector('voidr.note', {
+          kind: item.annotation.kind,
+          evidenceRef: screenshotRef,
+          timestampMs: item.annotation.timestampMs,
+        });
+      }
+    });
+  }
+
+  async #drainAnnotationOutbox(scheduleRetry: boolean): Promise<{
+    syncedIds: string[];
+    failedIds: string[];
+    pendingCount: number;
+  }> {
+    const result = await this.annotationOutbox.drain((item) => this.#uploadAnnotation(item));
+    for (const localId of result.syncedIds) {
+      this.#emitAnnotationSync('synced', localId, result.pendingCount);
+    }
+    if (result.failedIds.length > 0) {
+      this.#emitAnnotationSync('pending', result.failedIds[0]!, result.pendingCount);
+      if (scheduleRetry && !this.#annotationRetryTimer) {
+        const delay = this.#annotationRetryDelayMs;
+        this.#annotationRetryDelayMs = Math.min(60_000, delay * 2);
+        this.#annotationRetryTimer = setTimeout(() => {
+          this.#annotationRetryTimer = undefined;
+          void this.#drainAnnotationOutbox(true);
+        }, delay);
+      }
+    } else {
+      this.#annotationRetryDelayMs = 2_000;
+      if (this.#annotationRetryTimer) clearTimeout(this.#annotationRetryTimer);
+      this.#annotationRetryTimer = undefined;
+    }
+    return result;
+  }
+
+  #emitAnnotationSync(
+    state: 'queued' | 'synced' | 'pending',
+    localId: string,
+    pendingCount: number,
+  ): void {
+    if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) return;
+    this.window.webContents.send('capture:annotation-sync', { state, localId, pendingCount });
+  }
+
+  #serializeVerificationMutation<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.#verificationMutationTail.then(task, task);
+    this.#verificationMutationTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   #increment(category: EvidenceCategory, increment = 1): void {
