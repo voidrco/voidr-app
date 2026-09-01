@@ -216,11 +216,15 @@ describe('Electron security contract', () => {
     expect(captureSource).not.toContain('collector?.stopAndFlush??collector?.stopAndFinalize');
   });
 
-  it('bounds target loading and retries once without deleting the user session', () => {
+  it('bounds target loading, serializes auth popups and retries without deleting the user session', () => {
     expect(captureSource).toContain('TARGET_LOAD_TIMEOUT_MS = 15_000');
     expect(captureSource).toContain('await this.#loadTargetUrl(');
-    expect(captureSource).toContain('this.#view.webContents.session.clearCache()');
+    expect(captureSource).toContain('view.webContents.session.clearCache()');
     expect(captureSource).toContain("type: 'web.load-retry'");
+    expect(captureSource).toContain('this.#queuedTargetWindowOpenUrl = url');
+    expect(captureSource).toContain('if (isExpectedNavigationAbort(error))');
+    expect(captureSource).toContain('await this.#destroyTargetView()');
+    expect(captureSource).not.toContain('if (isTrustedWebUrl(url)) void view.webContents.loadURL(url)');
     expect(captureSource).not.toContain("clearStorageData({ storages: ['cookies']");
     expect(captureSource.indexOf('await this.#loadTargetUrl(')).toBeLessThan(
       captureSource.indexOf('this.window.contentView.addChildView(this.#view)'),

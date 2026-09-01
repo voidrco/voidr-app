@@ -38,6 +38,8 @@ import {
 } from './service-client';
 import { inspectCollectorStopAttempt } from './collector-stop';
 import { AnnotationOutbox, type DurableAnnotation } from './annotation-outbox';
+import { allowCollectorInContentSecurityPolicy } from './collector-csp';
+import { isExpectedNavigationAbort } from './target-navigation';
 
 const COLLECTOR_WORLD = 1004;
 const REGION_SELECTION_WORLD = 1005;
@@ -183,6 +185,8 @@ export class WebCaptureController {
   #annotationRetryTimer?: NodeJS.Timeout;
   #annotationRetryDelayMs = 2_000;
   #verificationMutationTail: Promise<void> = Promise.resolve();
+  #queuedTargetWindowOpenUrl?: string;
+  #targetLoadInProgress = false;
 
   constructor(
     private readonly window: BrowserWindow,
@@ -273,7 +277,11 @@ export class WebCaptureController {
         },
       });
 
-      this.#view = this.#createTargetView(parsed.runtime.organizationId, authorization.safeContext.applicationId);
+      this.#view = this.#createTargetView(
+        parsed.runtime.organizationId,
+        authorization.safeContext.applicationId,
+        this.#client.runtime.collectorUrl,
+      );
       // Load while detached. Mounting an empty native view can block the
       // protocol handoff on an already-open macOS window.
       await this.#loadTargetUrl(authorization.safeContext.safeTargetUrl);
@@ -288,6 +296,7 @@ export class WebCaptureController {
       return this.status;
     } catch (error) {
       this.#fail(error, 'WEB_PREPARE_FAILED', undefined, true);
+      await this.#destroyTargetView();
       throw error;
     }
   }
@@ -849,16 +858,7 @@ export class WebCaptureController {
     this.#stopSignalPolling();
     this.#acknowledgedVoiceSegmentIds.clear();
     await this.clearSelection();
-    if (this.#view) {
-      try {
-        if (this.#view.webContents.debugger.isAttached()) this.#view.webContents.debugger.detach();
-      } catch {}
-      try {
-        this.window.contentView.removeChildView(this.#view);
-      } catch {}
-      this.#view.webContents.close({ waitForBeforeUnload: false });
-      this.#view = undefined;
-    }
+    await this.#destroyTargetView();
     this.#authorization = undefined;
     this.#client = undefined;
     this.#collectorScript = undefined;
@@ -878,7 +878,11 @@ export class WebCaptureController {
     }
   }
 
-  #createTargetView(organizationId: string, applicationId: string): WebContentsView {
+  #createTargetView(
+    organizationId: string,
+    applicationId: string,
+    collectorUrl: string,
+  ): WebContentsView {
     const partition = createHash('sha256').update(`${organizationId}\0${applicationId}`).digest('hex').slice(0, 24);
     const view = new WebContentsView({
       webPreferences: {
@@ -896,8 +900,26 @@ export class WebCaptureController {
         spellcheck: false,
       },
     });
+    const targetSession = view.webContents.session;
+    targetSession.webRequest.onHeadersReceived((details, callback) => {
+      const isTargetMainFrame =
+        details.webContentsId === view.webContents.id && details.resourceType === 'mainFrame';
+      callback({
+        responseHeaders: isTargetMainFrame
+          ? allowCollectorInContentSecurityPolicy(details.responseHeaders, collectorUrl)
+          : details.responseHeaders,
+      });
+    });
     view.webContents.setWindowOpenHandler(({ url }) => {
-      if (isTrustedWebUrl(url)) void view.webContents.loadURL(url);
+      if (isTrustedWebUrl(url) && this.#view === view) {
+        // OAuth providers commonly request a popup. Keep the login inside the
+        // capture surface, but never replace a navigation from inside
+        // setWindowOpenHandler: Chromium can abort the in-flight load and, on
+        // macOS, retrying while that view is torn down can crash the browser
+        // process. The active load drains this queue once it settles.
+        this.#queuedTargetWindowOpenUrl = url;
+        if (!this.#targetLoadInProgress) this.#scheduleQueuedTargetWindowOpen(view);
+      }
       return { action: 'deny' };
     });
     view.webContents.on('will-navigate', (event, url) => {
@@ -961,28 +983,154 @@ export class WebCaptureController {
   }
 
   async #loadTargetUrl(url: string): Promise<void> {
-    if (!this.#view) throw new Error('Target Web ausente.');
-    const load = () =>
-      withTimeout(
-        this.#view!.webContents.loadURL(url),
-        TARGET_LOAD_TIMEOUT_MS,
-        'A aplicação demorou demais para abrir no Voidr Capture.',
-      );
+    const view = this.#view;
+    if (!view || view.webContents.isDestroyed()) throw new Error('Target Web ausente.');
+    this.#targetLoadInProgress = true;
+    let nextUrl = url;
+    let retryAvailable = true;
     try {
-      await load();
-    } catch (firstError) {
-      if (!this.#view || this.#view.webContents.isDestroyed()) throw firstError;
-      this.#view.webContents.stop();
-      await this.#view.webContents.session.clearCache();
-      await this.ledger.append({
-        type: 'web.load-retry',
-        generation: this.#state.generation,
-        stage: 'preparing',
-        data: {
-          reason: firstError instanceof Error ? firstError.message : 'Falha transitória.',
-        },
+      for (let redirectCount = 0; redirectCount < 8; redirectCount += 1) {
+        if (this.#view !== view || view.webContents.isDestroyed()) {
+          throw new Error('A aplicação capturada foi fechada durante a navegação.');
+        }
+        try {
+          await withTimeout(
+            view.webContents.loadURL(nextUrl),
+            TARGET_LOAD_TIMEOUT_MS,
+            'A aplicação demorou demais para abrir no Voidr Capture.',
+          );
+        } catch (error) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          const queuedUrl = this.#takeQueuedTargetWindowOpen(view);
+          if (queuedUrl) {
+            nextUrl = queuedUrl;
+            continue;
+          }
+          if (isExpectedNavigationAbort(error)) {
+            await withTimeout(
+              this.#waitForTrustedTargetLoad(view),
+              TARGET_LOAD_TIMEOUT_MS,
+              'O redirecionamento de autenticação não terminou no Voidr Capture.',
+            );
+            return;
+          }
+          if (!retryAvailable) throw error;
+          retryAvailable = false;
+          view.webContents.stop();
+          await view.webContents.session.clearCache();
+          await this.ledger.append({
+            type: 'web.load-retry',
+            generation: this.#state.generation,
+            stage: 'preparing',
+            data: {
+              reason: error instanceof Error ? error.message : 'Falha transitória.',
+            },
+          });
+          continue;
+        }
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const queuedUrl = this.#takeQueuedTargetWindowOpen(view);
+        if (!queuedUrl) return;
+        nextUrl = queuedUrl;
+      }
+      throw new Error('A autenticação abriu redirecionamentos demais no Voidr Capture.');
+    } finally {
+      if (this.#view === view) {
+        this.#targetLoadInProgress = false;
+        if (this.#queuedTargetWindowOpenUrl) this.#scheduleQueuedTargetWindowOpen(view);
+      }
+    }
+  }
+
+  #takeQueuedTargetWindowOpen(view: WebContentsView): string | undefined {
+    if (this.#view !== view) return undefined;
+    const url = this.#queuedTargetWindowOpenUrl;
+    this.#queuedTargetWindowOpenUrl = undefined;
+    return url;
+  }
+
+  #scheduleQueuedTargetWindowOpen(view: WebContentsView): void {
+    setImmediate(() => {
+      if (
+        this.#view !== view ||
+        view.webContents.isDestroyed() ||
+        this.#targetLoadInProgress
+      ) return;
+      const url = this.#takeQueuedTargetWindowOpen(view);
+      if (!url) return;
+      void this.#loadTargetUrl(url).catch((error) => {
+        if (this.#view !== view) return;
+        this.#fail(
+          error,
+          'WEB_NAVIGATION_RECOVERY_FAILED',
+          this.#state.stage === 'recording' ? 'stop' : undefined,
+          this.#state.stage !== 'recording',
+        );
       });
-      await load();
+    });
+  }
+
+  #waitForTrustedTargetLoad(view: WebContentsView): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        view.webContents.removeListener('did-finish-load', onFinish);
+        view.webContents.removeListener('did-fail-load', onFail);
+        view.webContents.removeListener('destroyed', onDestroyed);
+      };
+      const finish = () => {
+        cleanup();
+        resolve();
+      };
+      const fail = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onFinish = () => {
+        const currentUrl = view.webContents.getURL();
+        if (isTrustedWebUrl(currentUrl)) finish();
+      };
+      const onFail = (
+        _event: Electron.Event,
+        errorCode: number,
+        errorDescription: string,
+        validatedUrl: string,
+        isMainFrame: boolean,
+      ) => {
+        if (!isMainFrame || errorCode === -3) return;
+        fail(new Error(`${errorDescription} (${errorCode}) loading '${validatedUrl}'`));
+      };
+      const onDestroyed = () => fail(new Error('A aplicação capturada foi fechada durante o redirecionamento.'));
+
+      view.webContents.on('did-finish-load', onFinish);
+      view.webContents.on('did-fail-load', onFail);
+      view.webContents.once('destroyed', onDestroyed);
+
+      if (!view.webContents.isLoadingMainFrame() && isTrustedWebUrl(view.webContents.getURL())) {
+        queueMicrotask(finish);
+      }
+    });
+  }
+
+  async #destroyTargetView(): Promise<void> {
+    const view = this.#view;
+    this.#view = undefined;
+    this.#queuedTargetWindowOpenUrl = undefined;
+    this.#targetLoadInProgress = false;
+    if (!view) return;
+    view.webContents.session.webRequest.onHeadersReceived(null);
+    try {
+      if (view.webContents.debugger.isAttached()) view.webContents.debugger.detach();
+    } catch {}
+    try {
+      view.webContents.stop();
+    } catch {}
+    try {
+      this.window.contentView.removeChildView(view);
+    } catch {}
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!view.webContents.isDestroyed()) {
+      view.webContents.close({ waitForBeforeUnload: false });
     }
   }
 
