@@ -32,9 +32,28 @@ import { loadWorkspaceCycleDetail } from "./workspace-cycle-recovery";
 type WorkspaceHomeProps = {
   runtime: LocalRuntimeConfig;
   busy: boolean;
+  connectionRequired: boolean;
+  onConnectWorkspace: () => Promise<void>;
+  onConnectionChange: (
+    state: "disconnected" | "connecting" | "connected" | "error",
+  ) => void;
   onStartLoop: (loopId: string) => Promise<void>;
   onOpenCycle: (loopId: string, cycleId: string) => void;
 };
+
+function workspaceErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/401|unauthor|sessão|login|conta google|autentic/i.test(message)) {
+    return "Sua sessão precisa ser confirmada. Entre novamente com sua conta Voidr.";
+  }
+  if (/403|404|forbidden|not found|não encontrad|habilitad|permitid/i.test(message)) {
+    return "O Loops ainda não está disponível para esta organização. Fale com o responsável pelo seu workspace.";
+  }
+  if (/fetch|network|timeout|timed out|conexão|indisponível/i.test(message)) {
+    return "Não foi possível acessar a Voidr agora. Verifique sua conexão e tente novamente.";
+  }
+  return "Não foi possível carregar este workspace. Tente novamente ou abra a Voidr para reconectar.";
+}
 
 const statusCopy: Record<
   string,
@@ -203,6 +222,9 @@ function isDistinctMission(mission: string, loopName: string): boolean {
 export function WorkspaceHome({
   runtime,
   busy,
+  connectionRequired,
+  onConnectWorkspace,
+  onConnectionChange,
   onStartLoop,
   onOpenCycle,
 }: WorkspaceHomeProps) {
@@ -218,9 +240,21 @@ export function WorkspaceHome({
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
+    if (connectionRequired) {
+      setLoops([]);
+      setCycles([]);
+      setDetail(undefined);
+      setSelectedLoopId("");
+      setSelectedCycleId("");
+      setError("");
+      setLoading(false);
+      onConnectionChange("disconnected");
+      return;
+    }
     let active = true;
     const load = async (quiet = false) => {
       if (!quiet) setLoading(true);
+      if (!quiet) onConnectionChange("connecting");
       try {
         const values = await window.voidrCapture.workspace.listLoops(runtime);
         if (!active) return;
@@ -231,11 +265,11 @@ export function WorkspaceHome({
             : (values[0]?.id ?? ""),
         );
         setError("");
-      } catch {
+        onConnectionChange("connected");
+      } catch (loadError) {
         if (!active) return;
-        setError(
-          "Não foi possível carregar seus Loops. Verifique a conexão e tente novamente.",
-        );
+        setError(workspaceErrorMessage(loadError));
+        onConnectionChange("error");
       } finally {
         if (active && !quiet) setLoading(false);
       }
@@ -246,7 +280,7 @@ export function WorkspaceHome({
       active = false;
       window.clearInterval(timer);
     };
-  }, [runtime, refreshVersion]);
+  }, [connectionRequired, onConnectionChange, runtime, refreshVersion]);
 
   useEffect(() => {
     if (!selectedLoopId) {
@@ -344,6 +378,35 @@ export function WorkspaceHome({
   const technicalEvidence = (detail?.evidence ?? []).filter(
     (item) => !["replay", "annotation", "transcript", "screenshot"].includes(item.kind),
   );
+
+  if (connectionRequired) {
+    return (
+      <main className="workspace-home">
+        <section className="workspace-connect" aria-labelledby="workspace-connect-title">
+          <span className="workspace-connect-icon" aria-hidden="true">
+            <ExternalLink size={20} />
+          </span>
+          <div>
+            <span>Voidr Capture</span>
+            <h1 id="workspace-connect-title">Conecte seu workspace</h1>
+            <p>
+              Abra a Voidr, escolha sua organização e inicie um teste. O Capture recebe o
+              contexto automaticamente — sem IDs ou configuração manual.
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="lg"
+            icon={<ExternalLink size={14} />}
+            disabled={busy}
+            onClick={() => void onConnectWorkspace()}
+          >
+            Abrir a Voidr
+          </Button>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="workspace-home">

@@ -138,8 +138,8 @@ describe("desktop experience contract", () => {
   });
 
   it("never persists the local development credential in renderer storage", () => {
-    expect(appSource).toContain("localDevKey: _ephemeralSecret");
-    expect(appSource).toContain("JSON.stringify(persistableRuntime)");
+    expect(appSource).toContain("serializeWorkspaceBinding(runtime)");
+    expect(appSource).not.toContain("JSON.stringify(runtime)");
     expect(appSource).not.toContain("JSON.stringify(runtime));");
   });
 

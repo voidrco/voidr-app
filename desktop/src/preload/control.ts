@@ -158,6 +158,8 @@ const api = {
   },
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
   workspace: {
+    openPlatform: (runtime: LocalRuntimeConfig): Promise<void> =>
+      ipcRenderer.invoke('workspace:open-platform', runtime),
     listLoops: (runtime: LocalRuntimeConfig): Promise<DesktopLoopSummary[]> =>
       ipcRenderer
         .invoke('workspace:list-loops', runtime)

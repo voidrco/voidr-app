@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { LocalRuntimeConfig } from '@voidr/capture-contracts';
-import { runtimeForDeployment } from './channels';
+import {
+  restoreRuntime,
+  runtimeForDeployment,
+  serializeWorkspaceBinding,
+  workspaceContextLabel,
+} from './channels';
 
 const local: LocalRuntimeConfig = {
   serviceUrl: 'http://127.0.0.1:3000/v1',
@@ -19,6 +24,7 @@ describe('capture deployment channels', () => {
     expect(runtime).toMatchObject({
       serviceUrl: 'https://api.voidr.co/v1',
       collectorUrl: 'https://collector.voidr.co',
+      platformUrl: 'https://platform.voidr.co',
       localAdapter: false,
       organizationId: 'org_production',
     });
@@ -30,6 +36,18 @@ describe('capture deployment channels', () => {
       localAdapter: true,
       localDevKey: 'voidr-verification-local',
       organizationId: 'org_fixture',
+    });
+  });
+
+  it('derives branch preview endpoints without accepting arbitrary origins', () => {
+    expect(
+      runtimeForDeployment('preview', local, 'org_serasa_agro', 'release-hive-tctx'),
+    ).toMatchObject({
+      serviceUrl: 'https://release-hive-tctx.api-preview.voidr.co/v1',
+      collectorUrl: 'https://collector-staging.voidr.co',
+      platformUrl: 'https://release-hive-tctx.app-preview.voidr.co',
+      localAdapter: false,
+      organizationId: 'org_serasa_agro',
     });
   });
 
@@ -48,5 +66,35 @@ describe('capture deployment channels', () => {
       localDevKey: 'voidr-verification-local',
       organizationId: 'org_fixture',
     });
+  });
+
+  it('restores only the organization binding from renderer storage', () => {
+    const restored = restoreRuntime(
+      JSON.stringify({
+        organizationId: 'org_blip',
+        serviceUrl: 'https://attacker.example/v1',
+        localAdapter: true,
+        localDevKey: 'attacker-key',
+      }),
+    );
+
+    expect(restored).toMatchObject({
+      organizationId: 'org_blip',
+      serviceUrl: 'http://127.0.0.1:3000/v1',
+      localAdapter: true,
+      localDevKey: 'voidr-verification-local',
+    });
+    expect(JSON.parse(serializeWorkspaceBinding(restored))).toEqual({
+      organizationId: 'org_blip',
+    });
+  });
+
+  it('uses an actionable workspace label before the first production handoff', () => {
+    expect(
+      workspaceContextLabel({
+        ...runtimeForDeployment('production', local, 'org_pending_launch'),
+      }),
+    ).toBe('Conecte seu workspace');
+    expect(workspaceContextLabel(local)).toBe('Workspace local');
   });
 });

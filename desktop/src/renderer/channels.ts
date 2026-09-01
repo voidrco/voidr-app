@@ -1,4 +1,7 @@
-import type { LocalRuntimeConfig } from '@voidr/capture-contracts';
+import {
+  PENDING_CAPTURE_ORGANIZATION_ID,
+  type LocalRuntimeConfig,
+} from '@voidr/capture-contracts';
 
 /**
  * Endpoints are per ENVIRONMENT, so they are baked at build time — a customer
@@ -13,8 +16,6 @@ import type { LocalRuntimeConfig } from '@voidr/capture-contracts';
 export type CaptureChannel = 'local' | 'preview' | 'production';
 
 /** Replaced by the deep link before any request that needs a real tenant. */
-const PENDING_ORGANIZATION = 'org_pending_launch';
-
 const LOCAL: LocalRuntimeConfig = {
   serviceUrl: 'http://127.0.0.1:3000/v1',
   collectorUrl: 'http://localhost:3100',
@@ -29,10 +30,10 @@ const PRODUCTION: LocalRuntimeConfig = {
   serviceUrl: 'https://api.voidr.co/v1',
   collectorUrl: 'https://collector.voidr.co',
   collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js',
-  platformUrl: 'https://app.voidr.co',
+  platformUrl: 'https://platform.voidr.co',
   localAdapter: false,
   localDevKey: 'voidr-capture-production',
-  organizationId: PENDING_ORGANIZATION,
+  organizationId: PENDING_CAPTURE_ORGANIZATION_ID,
 };
 
 /**
@@ -66,7 +67,7 @@ export const defaultRuntime: LocalRuntimeConfig =
     : captureChannel === 'preview'
       ? preview(
           import.meta.env.VITE_VOIDR_CAPTURE_PREVIEW_SLUG || 'release-capture',
-          import.meta.env.VITE_VOIDR_CAPTURE_ORGANIZATION || PENDING_ORGANIZATION,
+          import.meta.env.VITE_VOIDR_CAPTURE_ORGANIZATION || PENDING_CAPTURE_ORGANIZATION_ID,
         )
       : PRODUCTION;
 
@@ -76,18 +77,55 @@ export const defaultRuntime: LocalRuntimeConfig =
  * accidentally query a developer's localhost (and cannot inject an origin).
  */
 export function runtimeForDeployment(
-  deployment: 'local' | 'production',
+  deployment: 'local' | 'preview' | 'production',
   _current: LocalRuntimeConfig,
   organizationId: string,
+  previewSlug?: string,
 ): LocalRuntimeConfig {
   // A deep link's deployment label is server-owned. Never let a persisted
   // runtime from an older desktop build override its baked trust boundary —
   // stale dev keys/endpoints otherwise turn a valid local Loop into a
   // misleading tenant-scoped "not found" response.
-  const selected = deployment === 'production' ? PRODUCTION : LOCAL;
+  if (deployment === 'preview' && !previewSlug) throw new Error('O link de preview está incompleto.');
+  const selected =
+    deployment === 'production'
+      ? PRODUCTION
+      : deployment === 'preview'
+        ? preview(previewSlug!, PENDING_CAPTURE_ORGANIZATION_ID)
+        : LOCAL;
   return { ...selected, organizationId };
 }
 
 export function isPendingOrganization(organizationId: string): boolean {
-  return organizationId === PENDING_ORGANIZATION;
+  return organizationId === PENDING_CAPTURE_ORGANIZATION_ID;
+}
+
+/**
+ * Renderer storage is not a configuration boundary. Persist only the tenant
+ * binding and always restore endpoints from the signed build's channel.
+ */
+export function restoreRuntime(serialized: string | null): LocalRuntimeConfig {
+  if (!serialized) return defaultRuntime;
+  try {
+    const value = JSON.parse(serialized) as { organizationId?: unknown };
+    const organizationId = value.organizationId;
+    if (
+      typeof organizationId !== 'string' ||
+      !/^org_[A-Za-z0-9_-]{1,196}$/.test(organizationId)
+    ) {
+      return defaultRuntime;
+    }
+    return { ...defaultRuntime, organizationId };
+  } catch {
+    return defaultRuntime;
+  }
+}
+
+export function serializeWorkspaceBinding(runtime: LocalRuntimeConfig): string {
+  return JSON.stringify({ organizationId: runtime.organizationId });
+}
+
+export function workspaceContextLabel(runtime: LocalRuntimeConfig): string {
+  if (isPendingOrganization(runtime.organizationId)) return 'Conecte seu workspace';
+  return runtime.localAdapter ? 'Workspace local' : 'Workspace Voidr';
 }

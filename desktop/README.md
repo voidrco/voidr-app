@@ -22,8 +22,9 @@ Voidr Platform continua sendo a experiência canônica de replay, comparação, 
   resumível.
 - API: Cycle e surface chegam ao app sem cair no adapter Web; proxy/CA ainda permanecem indisponíveis
   até o gate de segurança.
-- Não incluídos neste corte: autenticação PKCE de produção, região livre, Appium/scrcpy, iOS,
-  proxy de API e distribuição pública assinada.
+- Autenticação de produção: OAuth PKCE com login organizacional; o token fica somente na memória do
+  processo principal e as chamadas de Loops usam bearer token org-scoped.
+- Não incluídos neste corte: região livre, Appium/scrcpy, iOS, proxy de API e atualização automática.
 
 ## Executar
 
@@ -56,6 +57,20 @@ No macOS, copie o bundle gerado em
 `com.github.electron` como dono de `voidr://`; o bridge MCP pode apontar para o
 checkout com `VOIDR_CAPTURE_DEV_APP_DIR=/caminho/absoluto/voidr-app/desktop`.
 
+## Release macOS para clientes
+
+O workflow `Capture Desktop release` gera o pacote Apple Silicon, assina o app e o DMG com
+Developer ID, notariza e valida ambos com o Gatekeeper. Ele falha fechado se qualquer credencial de
+release estiver ausente. Os secrets esperados no GitHub são apenas referenciados pelo nome:
+
+- `APPLE_CODESIGN_IDENTITY`;
+- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`;
+- `MACOS_CERTIFICATE_P12_BASE64` e `MACOS_CERTIFICATE_PASSWORD`.
+
+O artefato do workflow já sai com `capture/<versão>/...` e `capture/latest.json`, no layout consumido
+pelo Service. Ao promover para o bucket privado, envie primeiro os arquivos versionados e publique
+`latest.json` por último. Nunca distribua a um cliente o DMG gerado localmente com assinatura ad-hoc.
+
 ## Android
 
 O desktop procura `adb` em `ANDROID_SDK_ROOT`, `ANDROID_HOME` e nos caminhos usuais de Android
@@ -83,8 +98,8 @@ abre somente um package já instalado.
   diálogo nativo do macOS; câmera permanece negada;
 - sessões persistentes são particionadas por organização e aplicação;
 - ledger contém somente IDs/URLs sanitizadas, nunca capability ou collector token;
-- o bundle usa ASAR com validação de integridade, fuses restritivos e assinatura ad-hoc para testes
-  locais. Releases públicos ainda exigem certificados e notarização oficiais.
+- o bundle usa ASAR com validação de integridade e fuses restritivos; builds locais recebem assinatura
+  ad-hoc, enquanto o workflow público exige Developer ID, assinatura do DMG e notarização da Apple.
 
 O threat model e os gates de release ficam em [`SECURITY.md`](./SECURITY.md).
 

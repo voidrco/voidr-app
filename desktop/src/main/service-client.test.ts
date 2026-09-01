@@ -14,6 +14,47 @@ const runtime = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("VoidrServiceClient", () => {
+  it("authenticates every production workspace request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ success: true, data: [] }), { status: 200 }),
+    );
+    const productionRuntime = {
+      ...runtime,
+      serviceUrl: "https://api.voidr.co/v1",
+      collectorUrl: "https://collector.voidr.co",
+      collectorScriptUrl: "https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js",
+      platformUrl: "https://platform.voidr.co",
+      localAdapter: false,
+      organizationId: "org_blip",
+    };
+    const client = new VoidrServiceClient(productionRuntime);
+
+    await client.listLoops("organization-access-token");
+    await client.listLoopCycles("lts_blip", "organization-access-token");
+
+    for (const [, request] of fetchMock.mock.calls) {
+      expect(request).toMatchObject({
+        headers: { Authorization: "Bearer organization-access-token" },
+      });
+    }
+  });
+
+  it("fails before the network when a production workspace is not authenticated", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const client = new VoidrServiceClient({
+      ...runtime,
+      serviceUrl: "https://api.voidr.co/v1",
+      collectorUrl: "https://collector.voidr.co",
+      collectorScriptUrl: "https://cdn.voidr.co/voidr-collector/default/latest/recorder.min.js",
+      platformUrl: "https://platform.voidr.co",
+      localAdapter: false,
+      organizationId: "org_blip",
+    });
+
+    await expect(client.listLoops()).rejects.toThrow("Conecte sua conta Voidr");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("allows voice transcription to outlive the default control request timeout", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
