@@ -8,8 +8,11 @@ import {
   desktopCaptureLaunchSchema,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
+  PENDING_CAPTURE_ORGANIZATION_ID,
   prepareWebInputSchema,
   type DesktopCaptureLaunch,
+  type DesktopWorkspaceIdentity,
+  type DesktopWorkspaceLink,
 } from '@voidr/capture-contracts';
 import { annotationInputSchema } from '@voidr/capture-contracts';
 import { discoverAndroidSessions, doctorAndroid, launchAndroid } from './android-adapter';
@@ -18,9 +21,13 @@ import { CONTROL_ORIGIN, CONTROL_SCHEME, isControlRendererUrl, resolveControlAss
 import { VoidrServiceClient } from './service-client';
 import { LoopParticipantAuthSession } from './loop-participant-auth';
 import { WebCaptureController } from './web-capture-controller';
-import { parseDesktopCaptureLaunch } from './deep-link';
+import { parseDesktopProtocolLink } from './deep-link';
 import { AnnotationOutbox } from './annotation-outbox';
-import { createWorkspaceSession, workspacePlatformLoopsUrl } from './workspace-session';
+import {
+  connectWorkspaceSession,
+  createWorkspaceSession,
+  workspacePlatformLoopsUrl,
+} from './workspace-session';
 
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
@@ -48,9 +55,11 @@ const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
+let pendingWorkspaceLink: DesktopWorkspaceLink | undefined;
 let mainWindowCreation: Promise<void> | undefined;
 let launchAcceptanceFlight: Promise<unknown> | undefined;
 const loopParticipantAuth = new LoopParticipantAuthSession();
+const workspaceIdentities = new Map<string, DesktopWorkspaceIdentity>();
 let launchAcceptanceKey: string | undefined;
 let controlPanelMode: ControlPanelMode = 'default';
 let appIsQuitting = false;
@@ -142,6 +151,12 @@ function publishPendingLaunch(): void {
   }
 }
 
+function publishPendingWorkspaceLink(): void {
+  if (pendingWorkspaceLink && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('workspace:link-received', pendingWorkspaceLink);
+  }
+}
+
 function revealMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -210,6 +225,7 @@ async function ensureMainWindow(): Promise<void> {
   }
   await mainWindowCreation;
   publishPendingLaunch();
+  publishPendingWorkspaceLink();
   revealMainWindow();
 }
 
@@ -221,12 +237,22 @@ function scheduleMainWindow(): void {
 
 function receiveProtocolUrl(value: string): void {
   try {
-    pendingLaunch = parseDesktopCaptureLaunch(value);
-    publishPendingLaunch();
+    const link = parseDesktopProtocolLink(value);
+    if (link.kind === 'capture') {
+      pendingLaunch = link.value;
+      publishPendingLaunch();
+    } else {
+      pendingWorkspaceLink = link.value;
+      publishPendingWorkspaceLink();
+    }
     scheduleMainWindow();
   } catch {
     // Untrusted protocol input fails closed and never reaches a renderer.
   }
+}
+
+function workspaceIdentityKey(runtime: { serviceUrl: string; organizationId: string }): string {
+  return `${runtime.serviceUrl}|${runtime.organizationId}`;
 }
 
 function targetBounds(): Electron.Rectangle {
@@ -415,6 +441,51 @@ function registerIpc(): void {
     const workspace = await createWorkspaceSession(runtime, loopParticipantAuth);
     return workspace.client.listLoops(workspace.accessToken);
   });
+  ipcMain.handle('workspace:pending-link', (event) => {
+    assertControlSender(event);
+    const link = pendingWorkspaceLink ?? null;
+    pendingWorkspaceLink = undefined;
+    return link;
+  });
+  ipcMain.handle('workspace:session', async (event, runtimeInput) => {
+    assertControlSender(event);
+    const runtime = localRuntimeConfigSchema.parse(runtimeInput);
+    workspacePlatformLoopsUrl(runtime);
+    const key = workspaceIdentityKey(runtime);
+    const cachedIdentity = workspaceIdentities.get(key);
+    if (cachedIdentity) return cachedIdentity;
+    if (runtime.organizationId === PENDING_CAPTURE_ORGANIZATION_ID) return null;
+    if (runtime.localAdapter) {
+      const identity = await connectWorkspaceSession(runtime, loopParticipantAuth);
+      workspaceIdentities.set(key, identity);
+      return identity;
+    }
+    const accessToken = loopParticipantAuth.cachedAccessToken(
+      'organization',
+      runtime.organizationId,
+    );
+    if (!accessToken) return null;
+    const identity = await new VoidrServiceClient(runtime).workspaceIdentity(accessToken);
+    if (identity.organizationId !== runtime.organizationId) return null;
+    workspaceIdentities.set(key, identity);
+    return identity;
+  });
+  ipcMain.handle('workspace:connect', async (event, runtimeInput) => {
+    assertControlSender(event);
+    const runtime = localRuntimeConfigSchema.parse(runtimeInput);
+    const identity = await connectWorkspaceSession(runtime, loopParticipantAuth);
+    workspaceIdentities.set(workspaceIdentityKey(runtime), identity);
+    return identity;
+  });
+  ipcMain.handle('workspace:disconnect', (event, runtimeInput) => {
+    assertControlSender(event);
+    const runtime = localRuntimeConfigSchema.parse(runtimeInput);
+    workspacePlatformLoopsUrl(runtime);
+    workspaceIdentities.delete(workspaceIdentityKey(runtime));
+    if (!runtime.localAdapter) {
+      loopParticipantAuth.clear('organization', runtime.organizationId);
+    }
+  });
   ipcMain.handle('workspace:list-cycles', async (event, input) => {
     assertControlSender(event);
     const parsed = workspaceLoopInputSchema.parse(input);
@@ -598,7 +669,10 @@ async function createWindow(): Promise<void> {
     }
   });
   mainWindow.once('ready-to-show', () => mainWindow?.show());
-  mainWindow.webContents.on('did-finish-load', publishPendingLaunch);
+  mainWindow.webContents.on('did-finish-load', () => {
+    publishPendingLaunch();
+    publishPendingWorkspaceLink();
+  });
   if (isDevelopment) {
     await mainWindow.loadURL(process.env.VOIDR_CAPTURE_DEV_SERVER_URL!);
   } else {

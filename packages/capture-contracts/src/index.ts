@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const CAPTURE_HOST_VERSION = "CAPTURE-HOST/1" as const;
 export const VOIDR_CAPTURE_LAUNCH_VERSION = "VOIDR-CAPTURE-LAUNCH/1" as const;
+export const VOIDR_WORKSPACE_LINK_VERSION = "VOIDR-WORKSPACE-LINK/1" as const;
 export const PENDING_CAPTURE_ORGANIZATION_ID = "org_pending_launch" as const;
 
 const boundedId = z.string().trim().min(1).max(200);
@@ -84,6 +85,41 @@ export const desktopCaptureLaunchSchema = z
     }
   });
 export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
+
+/**
+ * Secret-free workspace selection sent by the authenticated Web platform to
+ * the native app. The URI selects a tenant only; the desktop still proves the
+ * user's membership with its own OAuth flow before any workspace data loads.
+ */
+export const desktopWorkspaceLinkSchema = z
+  .object({
+    version: z.literal(VOIDR_WORKSPACE_LINK_VERSION),
+    organizationId: boundedId.regex(/^org_[A-Za-z0-9]+$/),
+    deployment: z.enum(["local", "preview", "staging", "production"]),
+    previewSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).optional(),
+  })
+  .superRefine((link, context) => {
+    if (link.deployment === "preview" && !link.previewSlug) {
+      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is required" });
+    }
+    if (link.deployment !== "preview" && link.previewSlug) {
+      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is not allowed" });
+    }
+  });
+export type DesktopWorkspaceLink = z.infer<typeof desktopWorkspaceLinkSchema>;
+
+/** Safe, canonical identity projected by /auth/me after desktop OAuth. */
+export const desktopWorkspaceIdentitySchema = z.object({
+  organizationId: boundedId,
+  name: z.string().trim().min(1).max(200),
+  logoUrl: trustedWebUrlSchema.nullable(),
+  user: z.object({
+    name: z.string().trim().min(1).max(200),
+    email: z.string().trim().email().max(320),
+    picture: trustedWebUrlSchema.nullable(),
+  }),
+});
+export type DesktopWorkspaceIdentity = z.infer<typeof desktopWorkspaceIdentitySchema>;
 
 /** Canonical Voidr profile projected for a human-owned Cycle. */
 export const desktopCycleParticipantSchema = z.object({

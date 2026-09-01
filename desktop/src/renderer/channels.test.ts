@@ -18,16 +18,9 @@ const local: LocalRuntimeConfig = {
 };
 
 describe('capture deployment channels', () => {
-  it('routes a production link to baked HTTPS endpoints even from a dev build', () => {
-    const runtime = runtimeForDeployment('production', local, 'org_production');
-
-    expect(runtime).toMatchObject({
-      serviceUrl: 'https://api.voidr.co/v1',
-      collectorUrl: 'https://collector.voidr.co',
-      platformUrl: 'https://platform.voidr.co',
-      localAdapter: false,
-      organizationId: 'org_production',
-    });
+  it('rejects a production link in a local build', () => {
+    expect(() => runtimeForDeployment('production', local, 'org_production'))
+      .toThrow('Este Voidr Capture é do ambiente local');
   });
 
   it('keeps a local link on loopback and binds its organization', () => {
@@ -39,27 +32,15 @@ describe('capture deployment channels', () => {
     });
   });
 
-  it('routes a staging link only to the shared staging endpoints', () => {
-    expect(runtimeForDeployment('staging', local, 'org_itau')).toMatchObject({
-      serviceUrl: 'https://api-staging.voidr.co/v1',
-      collectorUrl: 'https://collector-staging.voidr.co',
-      collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/staging/latest/recorder.min.js',
-      platformUrl: 'https://platform-staging.voidr.co',
-      localAdapter: false,
-      organizationId: 'org_itau',
-    });
+  it('rejects a staging link in a local build', () => {
+    expect(() => runtimeForDeployment('staging', local, 'org_itau'))
+      .toThrow('Este Voidr Capture é do ambiente local');
   });
 
-  it('derives branch preview endpoints without accepting arbitrary origins', () => {
-    expect(
+  it('rejects a preview link in a local build', () => {
+    expect(() =>
       runtimeForDeployment('preview', local, 'org_serasa_agro', 'release-hive-tctx'),
-    ).toMatchObject({
-      serviceUrl: 'https://release-hive-tctx.api-preview.voidr.co/v1',
-      collectorUrl: 'https://collector-staging.voidr.co',
-      platformUrl: 'https://release-hive-tctx.app-preview.voidr.co',
-      localAdapter: false,
-      organizationId: 'org_serasa_agro',
-    });
+    ).toThrow('Este Voidr Capture é do ambiente local');
   });
 
   it('ignores a stale persisted runtime when a local launch arrives', () => {
@@ -103,7 +84,8 @@ describe('capture deployment channels', () => {
   it('uses an actionable workspace label before the first production handoff', () => {
     expect(
       workspaceContextLabel({
-        ...runtimeForDeployment('production', local, 'org_pending_launch'),
+        ...local,
+        organizationId: 'org_pending_launch',
       }),
     ).toBe('Conecte seu workspace');
     expect(workspaceContextLabel(local)).toBe('Workspace local');

@@ -1,9 +1,12 @@
 import {
   VOIDR_CAPTURE_LAUNCH_VERSION,
+  VOIDR_WORKSPACE_LINK_VERSION,
   desktopCaptureLaunchSchema,
+  desktopWorkspaceLinkSchema,
   isTrustedWebUrl,
   redactUrl,
   type DesktopCaptureLaunch,
+  type DesktopWorkspaceLink,
 } from '@voidr/capture-contracts';
 
 const V1 = 'voidr-loop-v1=';
@@ -69,6 +72,52 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     deployment: url.searchParams.get('deployment') ?? 'local',
     previewSlug: url.searchParams.get('preview') ?? undefined,
   });
+}
+
+export function parseDesktopWorkspaceLink(input: string): DesktopWorkspaceLink {
+  const url = new URL(input);
+  if (
+    url.protocol !== 'voidr:' ||
+    url.hostname !== 'workspace' ||
+    url.pathname !== '/connect' ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error('O link não pertence a um workspace do Voidr Capture.');
+  }
+  const keys = [...url.searchParams.keys()];
+  if (
+    keys.length < 3 ||
+    keys.length > 4 ||
+    new Set(keys).size !== keys.length ||
+    keys.some((key) => !['organization', 'v', 'deployment', 'preview'].includes(key)) ||
+    url.searchParams.get('v') !== '1'
+  ) {
+    throw new Error('O link de workspace está incompleto ou não é suportado.');
+  }
+  return desktopWorkspaceLinkSchema.parse({
+    version: VOIDR_WORKSPACE_LINK_VERSION,
+    organizationId: url.searchParams.get('organization'),
+    deployment: url.searchParams.get('deployment'),
+    previewSlug: url.searchParams.get('preview') ?? undefined,
+  });
+}
+
+export type DesktopProtocolLink =
+  | { kind: 'capture'; value: DesktopCaptureLaunch }
+  | { kind: 'workspace'; value: DesktopWorkspaceLink };
+
+export function parseDesktopProtocolLink(input: string): DesktopProtocolLink {
+  const url = new URL(input);
+  if (url.protocol !== 'voidr:') throw new Error('O link não pertence ao Voidr Capture.');
+  if (url.hostname === 'capture') {
+    return { kind: 'capture', value: parseDesktopCaptureLaunch(input) };
+  }
+  if (url.hostname === 'workspace') {
+    return { kind: 'workspace', value: parseDesktopWorkspaceLink(input) };
+  }
+  throw new Error('O link não pertence ao Voidr Capture.');
 }
 
 function normalizeTransport(value: string): string {

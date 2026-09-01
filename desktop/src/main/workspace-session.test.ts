@@ -23,15 +23,18 @@ const remoteRuntime = {
 describe('workspace session', () => {
   it('does not authenticate the explicit localhost adapter', async () => {
     const accessToken = vi.fn();
+    const cachedAccessToken = vi.fn();
 
-    const session = await createWorkspaceSession(localRuntime, { accessToken });
+    const session = await createWorkspaceSession(localRuntime, { accessToken, cachedAccessToken });
 
     expect(session.accessToken).toBeUndefined();
     expect(accessToken).not.toHaveBeenCalled();
+    expect(cachedAccessToken).not.toHaveBeenCalled();
   });
 
   it('blocks production before a tenant handoff arrives', async () => {
     const accessToken = vi.fn();
+    const cachedAccessToken = vi.fn();
 
     await expect(
       createWorkspaceSession(
@@ -39,32 +42,35 @@ describe('workspace session', () => {
           ...remoteRuntime,
           organizationId: 'org_pending_launch',
         },
-        { accessToken },
+        { accessToken, cachedAccessToken },
       ),
     ).rejects.toThrow('Conecte este aplicativo');
     expect(accessToken).not.toHaveBeenCalled();
   });
 
-  it('requests an organization-scoped token for a remote workspace', async () => {
-    const accessToken = vi.fn().mockResolvedValue('access-token');
+  it('uses only an already connected organization-scoped token for a remote workspace', async () => {
+    const accessToken = vi.fn();
+    const cachedAccessToken = vi.fn().mockReturnValue('access-token');
 
     const session = await createWorkspaceSession(
       {
         ...remoteRuntime,
         organizationId: 'org_gWjyShjiTKA1ndtD',
       },
-      { accessToken },
+      { accessToken, cachedAccessToken },
     );
 
     expect(session.accessToken).toBe('access-token');
-    expect(accessToken).toHaveBeenCalledWith(
+    expect(cachedAccessToken).toHaveBeenCalledWith(
       'organization',
       'org_gWjyShjiTKA1ndtD',
     );
+    expect(accessToken).not.toHaveBeenCalled();
   });
 
   it('trusts the explicit staging service and platform pair', async () => {
-    const accessToken = vi.fn().mockResolvedValue('staging-access-token');
+    const accessToken = vi.fn();
+    const cachedAccessToken = vi.fn().mockReturnValue('staging-access-token');
     const stagingRuntime = {
       ...remoteRuntime,
       serviceUrl: 'https://api-staging.voidr.co/v1',
@@ -72,20 +78,21 @@ describe('workspace session', () => {
       organizationId: 'org_XpZs54aP8Oop8qUz',
     };
 
-    const session = await createWorkspaceSession(stagingRuntime, { accessToken });
+    const session = await createWorkspaceSession(stagingRuntime, { accessToken, cachedAccessToken });
 
     expect(session.accessToken).toBe('staging-access-token');
-    expect(accessToken).toHaveBeenCalledWith(
+    expect(cachedAccessToken).toHaveBeenCalledWith(
       'organization',
       'org_XpZs54aP8Oop8qUz',
     );
     expect(workspacePlatformLoopsUrl(stagingRuntime)).toBe(
-      'https://platform-staging.voidr.co/loops',
+      'https://platform-staging.voidr.co/loops?capture=desktop',
     );
   });
 
   it('rejects a remote endpoint before requesting a bearer token', async () => {
-    const accessToken = vi.fn().mockResolvedValue('access-token');
+    const accessToken = vi.fn();
+    const cachedAccessToken = vi.fn().mockReturnValue('access-token');
 
     await expect(
       createWorkspaceSession(
@@ -94,7 +101,7 @@ describe('workspace session', () => {
           serviceUrl: 'https://attacker.example/v1',
           organizationId: 'org_gWjyShjiTKA1ndtD',
         },
-        { accessToken },
+        { accessToken, cachedAccessToken },
       ),
     ).rejects.toThrow('não é confiável');
     expect(accessToken).not.toHaveBeenCalled();
@@ -106,7 +113,7 @@ describe('workspace session', () => {
         ...remoteRuntime,
         organizationId: 'org_gWjyShjiTKA1ndtD',
       }),
-    ).toBe('https://platform.voidr.co/loops');
+    ).toBe('https://platform.voidr.co/loops?capture=desktop');
 
     expect(
       workspacePlatformLoopsUrl({
@@ -115,7 +122,7 @@ describe('workspace session', () => {
         platformUrl: 'https://pilot.app-preview.voidr.co',
         organizationId: 'org_gWjyShjiTKA1ndtD',
       }),
-    ).toBe('https://pilot.app-preview.voidr.co/loops');
+    ).toBe('https://pilot.app-preview.voidr.co/loops?capture=desktop');
 
     expect(() =>
       workspacePlatformLoopsUrl({

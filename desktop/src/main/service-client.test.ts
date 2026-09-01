@@ -14,6 +14,46 @@ const runtime = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("VoidrServiceClient", () => {
+  it("projects the canonical workspace logo, name and signed-in user from auth/me", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            email: "ana@itau.com.br",
+            name: "Ana QA",
+            picture: "https://images.example/ana.png",
+            organizationId: "org_XpZs54aP8Oop8qUz",
+            organization: {
+              id: "org_XpZs54aP8Oop8qUz",
+              name: "itau",
+              displayName: "Itaú",
+            },
+            logoUrl: "https://images.example/itau.png",
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const identity = await new VoidrServiceClient(runtime).workspaceIdentity("workspace-token");
+
+    expect(identity).toEqual({
+      organizationId: "org_XpZs54aP8Oop8qUz",
+      name: "Itaú",
+      logoUrl: "https://images.example/itau.png",
+      user: {
+        name: "Ana QA",
+        email: "ana@itau.com.br",
+        picture: "https://images.example/ana.png",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:3000/v1/auth/me",
+      expect.objectContaining({ headers: { Authorization: "Bearer workspace-token" } }),
+    );
+  });
+
   it("authenticates every production workspace request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ success: true, data: [] }), { status: 200 }),

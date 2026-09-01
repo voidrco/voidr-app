@@ -5,6 +5,7 @@ import {
   desktopLoopCycleDetailSchema,
   desktopLoopCycleSummarySchema,
   desktopLoopSummarySchema,
+  desktopWorkspaceIdentitySchema,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
   redactText,
@@ -17,6 +18,7 @@ import {
   type DesktopLoopEvidenceItem,
   type DesktopLoopSummary,
   type DesktopLoopWorkspaceState,
+  type DesktopWorkspaceIdentity,
   type LocalRuntimeConfig,
   type MobileAttachInput,
   type SafeWebContext,
@@ -280,6 +282,33 @@ export class VoidrServiceClient {
 
   constructor(runtime: unknown) {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
+  }
+
+  async workspaceIdentity(remoteAccessToken: string): Promise<DesktopWorkspaceIdentity> {
+    const value = await jsonRequest<Json>(`${this.runtime.serviceUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${remoteAccessToken}` },
+    });
+    const organization = record(value.organization);
+    const organizationId = stringValue(
+      value.organizationId ?? organization.id,
+      '',
+      200,
+    );
+    const email = stringValue(value.email, '', 320);
+    return desktopWorkspaceIdentitySchema.parse({
+      organizationId,
+      name: stringValue(
+        organization.displayName ?? organization.display_name ?? organization.name,
+        organizationId,
+        200,
+      ),
+      logoUrl: participantAvatarUrl({ picture: value.logoUrl }),
+      user: {
+        name: stringValue(value.name, email, 200),
+        email,
+        picture: participantAvatarUrl(value),
+      },
+    });
   }
 
   async listLoops(remoteAccessToken?: string): Promise<DesktopLoopSummary[]> {

@@ -1,6 +1,8 @@
 import {
   PENDING_CAPTURE_ORGANIZATION_ID,
   localRuntimeConfigSchema,
+  desktopWorkspaceIdentitySchema,
+  type DesktopWorkspaceIdentity,
   type LocalRuntimeConfig,
 } from '@voidr/capture-contracts';
 import { VoidrServiceClient } from './service-client';
@@ -10,6 +12,10 @@ type OrganizationAuthSession = {
     profile: 'organization',
     organizationId: string,
   ): Promise<string>;
+  cachedAccessToken(
+    profile: 'organization',
+    organizationId: string,
+  ): string | undefined;
 };
 
 function cleanUrl(value: string): URL {
@@ -72,7 +78,9 @@ function assertTrustedWorkspaceRuntime(runtime: LocalRuntimeConfig): void {
 export function workspacePlatformLoopsUrl(runtimeInput: unknown): string {
   const runtime = localRuntimeConfigSchema.parse(runtimeInput);
   assertTrustedWorkspaceRuntime(runtime);
-  return new URL('/loops', runtime.platformUrl).toString();
+  const url = new URL('/loops', runtime.platformUrl);
+  url.searchParams.set('capture', 'desktop');
+  return url.toString();
 }
 
 export async function createWorkspaceSession(
@@ -88,8 +96,41 @@ export async function createWorkspaceSession(
       'Conecte este aplicativo ao seu workspace pela plataforma Voidr.',
     );
   }
+  const accessToken = auth.cachedAccessToken('organization', runtime.organizationId);
+  if (!accessToken) {
+    throw new Error(
+      'Sua sessão do workspace não está conectada. Entre com sua conta Voidr para continuar.',
+    );
+  }
   return {
     client,
-    accessToken: await auth.accessToken('organization', runtime.organizationId),
+    accessToken,
   };
+}
+
+export async function connectWorkspaceSession(
+  runtimeInput: unknown,
+  auth: OrganizationAuthSession,
+): Promise<DesktopWorkspaceIdentity> {
+  const runtime = localRuntimeConfigSchema.parse(runtimeInput);
+  assertTrustedWorkspaceRuntime(runtime);
+  if (runtime.organizationId === PENDING_CAPTURE_ORGANIZATION_ID) {
+    throw new Error('Escolha um workspace na plataforma Voidr antes de entrar.');
+  }
+  if (runtime.localAdapter) {
+    return desktopWorkspaceIdentitySchema.parse({
+      organizationId: runtime.organizationId,
+      name: 'Workspace local',
+      logoUrl: null,
+      user: { name: 'Desenvolvimento local', email: 'local@voidr.co', picture: null },
+    });
+  }
+  const accessToken = await auth.accessToken('organization', runtime.organizationId);
+  const identity = await new VoidrServiceClient(runtime).workspaceIdentity(accessToken);
+  if (identity.organizationId !== runtime.organizationId) {
+    throw new Error(
+      'A conta autenticada não pertence ao workspace selecionado. Troque de conta e tente novamente.',
+    );
+  }
+  return identity;
 }

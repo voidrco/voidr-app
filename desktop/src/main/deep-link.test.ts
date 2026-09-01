@@ -1,7 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { parseDesktopCaptureLaunch, parseLoopLaunch } from './deep-link';
+import {
+  parseDesktopCaptureLaunch,
+  parseDesktopProtocolLink,
+  parseDesktopWorkspaceLink,
+  parseLoopLaunch,
+} from './deep-link';
 
 describe('desktop Loop bootstrap', () => {
+  it('parses a secret-free workspace switch from the Web platform', () => {
+    expect(
+      parseDesktopWorkspaceLink(
+        'voidr://workspace/connect?organization=org_XpZs54aP8Oop8qUz&deployment=staging&v=1',
+      ),
+    ).toEqual({
+      version: 'VOIDR-WORKSPACE-LINK/1',
+      organizationId: 'org_XpZs54aP8Oop8qUz',
+      deployment: 'staging',
+    });
+    expect(
+      parseDesktopProtocolLink(
+        'voidr://workspace/connect?organization=org_XpZs54aP8Oop8qUz&deployment=staging&v=1',
+      ).kind,
+    ).toBe('workspace');
+  });
+
+  it('rejects secrets and malformed workspace switches', () => {
+    for (const value of [
+      'voidr://workspace/connect?organization=org_itau&deployment=staging&v=1&token=secret',
+      'voidr://workspace/connect?organization=itau&deployment=staging&v=1',
+      'voidr://workspace/connect?organization=org_itau&deployment=preview&v=1',
+      'voidr://workspace/connect?organization=org_itau&deployment=production&preview=branch&v=1',
+      'voidr://workspace/connect?organization=org_itau&deployment=staging&v=1#secret',
+    ]) {
+      expect(() => parseDesktopWorkspaceLink(value)).toThrow();
+    }
+  });
+
   it('parses the secret-free operating-system handoff', () => {
     expect(
       parseDesktopCaptureLaunch(

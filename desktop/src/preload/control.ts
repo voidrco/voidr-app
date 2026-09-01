@@ -8,6 +8,8 @@ import type {
   DesktopLoopCycleDetail,
   DesktopLoopCycleSummary,
   DesktopLoopSummary,
+  DesktopWorkspaceIdentity,
+  DesktopWorkspaceLink,
   LocalRuntimeConfig,
   MobileAttachInput,
   PrepareWebInput,
@@ -19,6 +21,8 @@ import {
   desktopLoopCycleDetailSchema,
   desktopLoopCycleSummarySchema,
   desktopLoopSummarySchema,
+  desktopWorkspaceIdentitySchema,
+  desktopWorkspaceLinkSchema,
 } from '@voidr/capture-contracts';
 
 type Unsubscribe = () => void;
@@ -158,6 +162,28 @@ const api = {
   },
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
   workspace: {
+    pendingLink: (): Promise<DesktopWorkspaceLink | null> =>
+      ipcRenderer.invoke('workspace:pending-link').then((value) =>
+        value == null ? null : desktopWorkspaceLinkSchema.parse(value),
+      ),
+    session: (runtime: LocalRuntimeConfig): Promise<DesktopWorkspaceIdentity | null> =>
+      ipcRenderer.invoke('workspace:session', runtime).then((value) =>
+        value == null ? null : desktopWorkspaceIdentitySchema.parse(value),
+      ),
+    connect: (runtime: LocalRuntimeConfig): Promise<DesktopWorkspaceIdentity> =>
+      ipcRenderer
+        .invoke('workspace:connect', runtime)
+        .then((value) => desktopWorkspaceIdentitySchema.parse(value)),
+    disconnect: (runtime: LocalRuntimeConfig): Promise<void> =>
+      ipcRenderer.invoke('workspace:disconnect', runtime),
+    onLink: (callback: (link: DesktopWorkspaceLink) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = desktopWorkspaceLinkSchema.safeParse(value);
+        if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on('workspace:link-received', listener);
+      return () => ipcRenderer.removeListener('workspace:link-received', listener);
+    },
     openPlatform: (runtime: LocalRuntimeConfig): Promise<void> =>
       ipcRenderer.invoke('workspace:open-platform', runtime),
     listLoops: (runtime: LocalRuntimeConfig): Promise<DesktopLoopSummary[]> =>

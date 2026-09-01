@@ -26,6 +26,29 @@ export class LoopParticipantAuthSession {
   readonly #cached = new Map<AuthCacheKey, CachedToken>();
   readonly #flights = new Map<AuthCacheKey, Promise<string>>();
 
+  cachedAccessToken(
+    profile: LoopAuthProfile = 'participant',
+    organizationId?: string,
+  ): string | undefined {
+    const organization = profile === 'organization'
+      ? organizationIdSchema.parse(organizationId)
+      : undefined;
+    const cacheKey = organization ? `${profile}:${organization}` : profile;
+    const cached = this.#cached.get(cacheKey);
+    if (!cached || cached.expiresAt - Date.now() <= 60_000) {
+      this.#cached.delete(cacheKey);
+      return undefined;
+    }
+    return cached.value;
+  }
+
+  clear(profile: LoopAuthProfile = 'participant', organizationId?: string): void {
+    const organization = profile === 'organization'
+      ? organizationIdSchema.parse(organizationId)
+      : undefined;
+    this.#cached.delete(organization ? `${profile}:${organization}` : profile);
+  }
+
   async accessToken(
     profile: LoopAuthProfile = 'participant',
     organizationId?: string,
@@ -34,10 +57,18 @@ export class LoopParticipantAuthSession {
       ? organizationIdSchema.parse(organizationId)
       : undefined;
     const cacheKey = organization ? `${profile}:${organization}` : profile;
-    const cached = this.#cached.get(cacheKey);
-    if (cached && cached.expiresAt - Date.now() > 60_000) return cached.value;
+    const cached = this.cachedAccessToken(profile, organization);
+    if (cached) return cached;
     const inFlight = this.#flights.get(cacheKey);
     if (inFlight) return inFlight;
+    if (
+      profile === 'organization' &&
+      [...this.#flights.keys()].some((key) => key.startsWith('organization:'))
+    ) {
+      throw new Error(
+        'Já existe uma autenticação de workspace em andamento. Conclua ou feche essa janela e tente novamente.',
+      );
+    }
     const flight = this.#authorize(profile, organization);
     this.#flights.set(cacheKey, flight);
     try {

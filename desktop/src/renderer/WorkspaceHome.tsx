@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Braces,
   ChevronRight,
+  CheckCircle2,
   Clock3,
   ExternalLink,
   FileText,
@@ -33,6 +34,9 @@ type WorkspaceHomeProps = {
   runtime: LocalRuntimeConfig;
   busy: boolean;
   connectionRequired: boolean;
+  organizationSelected: boolean;
+  connectionState: "disconnected" | "connecting" | "connected" | "error";
+  connectionError: string;
   onConnectWorkspace: () => Promise<void>;
   onConnectionChange: (
     state: "disconnected" | "connecting" | "connected" | "error",
@@ -223,6 +227,9 @@ export function WorkspaceHome({
   runtime,
   busy,
   connectionRequired,
+  organizationSelected,
+  connectionState,
+  connectionError,
   onConnectWorkspace,
   onConnectionChange,
   onStartLoop,
@@ -380,29 +387,53 @@ export function WorkspaceHome({
   );
 
   if (connectionRequired) {
+    const authenticating = connectionState === "connecting";
     return (
       <main className="workspace-home">
         <section className="workspace-connect" aria-labelledby="workspace-connect-title">
           <span className="workspace-connect-icon" aria-hidden="true">
-            <ExternalLink size={20} />
+            {authenticating ? <Loader2 className="spin" size={20} /> : <ExternalLink size={20} />}
           </span>
           <div>
             <span>Voidr Capture</span>
-            <h1 id="workspace-connect-title">Conecte seu workspace</h1>
+            <h1 id="workspace-connect-title">
+              {organizationSelected ? "Entre no seu workspace" : "Escolha seu workspace"}
+            </h1>
             <p>
-              Abra a Voidr, escolha sua organização e inicie um teste. O Capture recebe o
-              contexto automaticamente — sem IDs ou configuração manual.
+              {organizationSelected
+                ? "Confirme sua conta Voidr no navegador. Depois do login, este app carrega o nome, o logo e os Loops do cliente selecionado."
+                : "Abra a Voidr Web e escolha o cliente. O app recebe somente o identificador do workspace; nenhuma credencial viaja no link."}
             </p>
           </div>
+          <ol className="workspace-auth-steps" aria-label="Etapas da conexão">
+            <li className={organizationSelected ? "complete" : "current"}>
+              {organizationSelected ? <CheckCircle2 size={14} /> : <span>1</span>}
+              <div><strong>Workspace</strong><small>{organizationSelected ? "Selecionado na Web" : "Escolha o cliente na Web"}</small></div>
+            </li>
+            <li className={authenticating ? "current" : ""}>
+              {authenticating ? <Loader2 className="spin" size={14} /> : <span>2</span>}
+              <div><strong>Autenticação</strong><small>Conta Google da Voidr</small></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><strong>Sincronização</strong><small>Logo, usuário e Loops</small></div>
+            </li>
+          </ol>
+          {connectionError && (
+            <p className="workspace-auth-error" role="alert">{connectionError}</p>
+          )}
           <Button
             variant="primary"
             size="lg"
-            icon={<ExternalLink size={14} />}
-            disabled={busy}
+            icon={authenticating ? <Loader2 className="spin" size={14} /> : <ExternalLink size={14} />}
+            disabled={busy || authenticating}
             onClick={() => void onConnectWorkspace()}
           >
-            Abrir a Voidr
+            {organizationSelected ? "Continuar com Google" : "Escolher na Voidr Web"}
           </Button>
+          <small className="workspace-auth-note">
+            Ambiente e endpoints são fixos nesta versão do app. Trocar de cliente não troca de ambiente.
+          </small>
         </section>
       </main>
     );

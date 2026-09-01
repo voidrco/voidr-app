@@ -101,11 +101,22 @@ export function runtimeForDeployment(
   organizationId: string,
   previewSlug?: string,
 ): LocalRuntimeConfig {
+  if (deployment !== captureChannel) {
+    throw new Error(
+      `Este Voidr Capture é do ambiente ${captureChannel}. Abra o link no app de ${deployment}.`,
+    );
+  }
   // A deep link's deployment label is server-owned. Never let a persisted
   // runtime from an older desktop build override its baked trust boundary —
   // stale dev keys/endpoints otherwise turn a valid local Loop into a
   // misleading tenant-scoped "not found" response.
   if (deployment === 'preview' && !previewSlug) throw new Error('O link de preview está incompleto.');
+  if (
+    deployment === 'preview' &&
+    previewSlug !== (import.meta.env.VITE_VOIDR_CAPTURE_PREVIEW_SLUG || 'release-capture')
+  ) {
+    throw new Error('Este Voidr Capture pertence a outro preview. Baixe o app deste ambiente.');
+  }
   const selected =
     deployment === 'production'
       ? PRODUCTION
@@ -115,6 +126,28 @@ export function runtimeForDeployment(
           ? STAGING
           : LOCAL;
   return { ...selected, organizationId };
+}
+
+export function runtimeForWorkspaceLink(
+  link: {
+    deployment: 'local' | 'preview' | 'staging' | 'production';
+    organizationId: string;
+    previewSlug?: string;
+  },
+  current: LocalRuntimeConfig,
+): LocalRuntimeConfig {
+  return runtimeForDeployment(
+    link.deployment,
+    current,
+    link.organizationId,
+    link.previewSlug,
+  );
+}
+
+export function captureEnvironmentLabel(): string {
+  return captureChannel === 'production' ? 'Produção' :
+    captureChannel === 'staging' ? 'Staging' :
+      captureChannel === 'preview' ? 'Preview' : 'Local';
 }
 
 export function isPendingOrganization(organizationId: string): boolean {
