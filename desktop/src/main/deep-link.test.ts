@@ -35,6 +35,14 @@ describe('desktop Loop bootstrap', () => {
     expect(JSON.stringify(parsed)).not.toMatch(/api-preview|collector-staging|https?:/i);
   });
 
+  it('accepts a staging launch without carrying endpoints', () => {
+    const parsed = parseDesktopCaptureLaunch(
+      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&deployment=staging&v=1',
+    );
+    expect(parsed.deployment).toBe('staging');
+    expect(JSON.stringify(parsed)).not.toMatch(/api-staging|collector-staging|https?:/i);
+  });
+
   it('marks an external participant launch without carrying an access token', () => {
     const parsed = parseDesktopCaptureLaunch(
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&access=participant',
@@ -50,7 +58,6 @@ describe('desktop Loop bootstrap', () => {
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1#secret',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?surface=web&v=1',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&access=admin',
-      'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&deployment=staging',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&deployment=preview&v=1',
       'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&deployment=preview&preview=https%3A%2F%2Fevil.example&v=1',
     ]) {

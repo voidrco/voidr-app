@@ -64,6 +64,9 @@ describe('CAPTURE-HOST/1 contracts', () => {
     expect(() =>
       desktopCaptureLaunchSchema.parse({ ...launch, cycleId: '../another-tenant' }),
     ).toThrow();
+    expect(desktopCaptureLaunchSchema.parse({ ...launch, deployment: 'staging' }).deployment).toBe(
+      'staging',
+    );
   });
 
   it('carries only the canonical participant projection into the desktop handoff', () => {

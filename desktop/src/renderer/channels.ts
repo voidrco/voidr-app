@@ -13,7 +13,7 @@ import {
  * rewriting anything inside a signed `.app` invalidates the signature (and the
  * notarization with it). Per-customer configuration must always arrive as data.
  */
-export type CaptureChannel = 'local' | 'preview' | 'production';
+export type CaptureChannel = 'local' | 'preview' | 'staging' | 'production';
 
 /** Replaced by the deep link before any request that needs a real tenant. */
 const LOCAL: LocalRuntimeConfig = {
@@ -36,6 +36,16 @@ const PRODUCTION: LocalRuntimeConfig = {
   organizationId: PENDING_CAPTURE_ORGANIZATION_ID,
 };
 
+const STAGING: LocalRuntimeConfig = {
+  serviceUrl: 'https://api-staging.voidr.co/v1',
+  collectorUrl: 'https://collector-staging.voidr.co',
+  collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/staging/latest/recorder.min.js',
+  platformUrl: 'https://platform-staging.voidr.co',
+  localAdapter: false,
+  localDevKey: 'voidr-capture-staging',
+  organizationId: PENDING_CAPTURE_ORGANIZATION_ID,
+};
+
 /**
  * Preview is a throwaway environment for a single branch, so it may bake a test
  * organization to stay usable before any deep link arrives. Production never
@@ -55,7 +65,14 @@ function preview(slug: string, organizationId: string): LocalRuntimeConfig {
 
 function resolveChannel(): CaptureChannel {
   const declared = import.meta.env.VITE_VOIDR_CAPTURE_CHANNEL;
-  if (declared === 'local' || declared === 'preview' || declared === 'production') return declared;
+  if (
+    declared === 'local' ||
+    declared === 'preview' ||
+    declared === 'staging' ||
+    declared === 'production'
+  ) {
+    return declared;
+  }
   return import.meta.env.DEV ? 'local' : 'production';
 }
 
@@ -69,7 +86,9 @@ export const defaultRuntime: LocalRuntimeConfig =
           import.meta.env.VITE_VOIDR_CAPTURE_PREVIEW_SLUG || 'release-capture',
           import.meta.env.VITE_VOIDR_CAPTURE_ORGANIZATION || PENDING_CAPTURE_ORGANIZATION_ID,
         )
-      : PRODUCTION;
+      : captureChannel === 'staging'
+        ? STAGING
+        : PRODUCTION;
 
 /**
  * A secret-free launch carries only a server-owned deployment label. Resolve
@@ -77,7 +96,7 @@ export const defaultRuntime: LocalRuntimeConfig =
  * accidentally query a developer's localhost (and cannot inject an origin).
  */
 export function runtimeForDeployment(
-  deployment: 'local' | 'preview' | 'production',
+  deployment: 'local' | 'preview' | 'staging' | 'production',
   _current: LocalRuntimeConfig,
   organizationId: string,
   previewSlug?: string,
@@ -92,7 +111,9 @@ export function runtimeForDeployment(
       ? PRODUCTION
       : deployment === 'preview'
         ? preview(previewSlug!, PENDING_CAPTURE_ORGANIZATION_ID)
-        : LOCAL;
+        : deployment === 'staging'
+          ? STAGING
+          : LOCAL;
   return { ...selected, organizationId };
 }
 

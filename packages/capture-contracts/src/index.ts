@@ -72,7 +72,7 @@ export const desktopCaptureLaunchSchema = z
     cycleId: opaqueId,
     surface: desktopCaptureSurfaceSchema,
     access: z.enum(["organization", "participant"]).default("organization"),
-    deployment: z.enum(["local", "preview", "production"]).default("local"),
+    deployment: z.enum(["local", "preview", "staging", "production"]).default("local"),
     previewSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).optional(),
   })
   .superRefine((launch, context) => {

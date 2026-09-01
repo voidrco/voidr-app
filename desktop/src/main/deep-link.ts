@@ -52,7 +52,9 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     ) ||
     (url.searchParams.has('access') && url.searchParams.get('access') !== 'participant') ||
     (url.searchParams.has('deployment') &&
-      !['local', 'preview', 'production'].includes(url.searchParams.get('deployment') ?? '')) ||
+      !['local', 'preview', 'staging', 'production'].includes(
+        url.searchParams.get('deployment') ?? '',
+      )) ||
     url.searchParams.get('v') !== '1'
   ) {
     throw new Error('O link do Voidr Capture está incompleto ou não é suportado.');

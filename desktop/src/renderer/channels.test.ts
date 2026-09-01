@@ -39,6 +39,17 @@ describe('capture deployment channels', () => {
     });
   });
 
+  it('routes a staging link only to the shared staging endpoints', () => {
+    expect(runtimeForDeployment('staging', local, 'org_itau')).toMatchObject({
+      serviceUrl: 'https://api-staging.voidr.co/v1',
+      collectorUrl: 'https://collector-staging.voidr.co',
+      collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/staging/latest/recorder.min.js',
+      platformUrl: 'https://platform-staging.voidr.co',
+      localAdapter: false,
+      organizationId: 'org_itau',
+    });
+  });
+
   it('derives branch preview endpoints without accepting arbitrary origins', () => {
     expect(
       runtimeForDeployment('preview', local, 'org_serasa_agro', 'release-hive-tctx'),
