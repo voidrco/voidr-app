@@ -63,9 +63,11 @@ O workflow `Capture Desktop release` gera o pacote Apple Silicon, assina o app e
 Developer ID, notariza e valida ambos com o Gatekeeper. Ele falha fechado se qualquer credencial de
 release estiver ausente. Os secrets esperados no GitHub são apenas referenciados pelo nome:
 
-- `APPLE_CODESIGN_IDENTITY`;
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`;
 - `MACOS_CERTIFICATE_P12_BASE64` e `MACOS_CERTIFICATE_PASSWORD`.
+
+O workflow deriva `APPLE_CODESIGN_IDENTITY` do certificado Developer ID importado; não mantenha
+uma segunda cópia manual desse nome nos secrets.
 
 O artefato do workflow já sai com `capture/<versão>/...` e `capture/latest.json`, no layout consumido
 pelo Service. Ao promover para o bucket privado, envie primeiro os arquivos versionados e publique

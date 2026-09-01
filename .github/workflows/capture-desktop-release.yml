@@ -19,7 +19,6 @@ jobs:
     env:
       VOIDR_PUBLIC_RELEASE: '1'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -50,7 +49,6 @@ jobs:
         run: |
           set -euo pipefail
           required=(
-            APPLE_CODESIGN_IDENTITY
             APPLE_ID
             APPLE_APP_SPECIFIC_PASSWORD
             APPLE_TEAM_ID
@@ -87,12 +85,21 @@ jobs:
             "${keychain_path}"
           security list-keychains -d user -s "${keychain_path}"
 
+          signing_identity="$(security find-identity -v -p codesigning "${keychain_path}" \
+            | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' \
+            | head -n 1)"
+          if [[ -z "${signing_identity}" ]]; then
+            echo "The imported certificate does not contain a Developer ID Application identity." >&2
+            exit 1
+          fi
+
           xcrun notarytool store-credentials "${notary_profile}" \
             --apple-id "${APPLE_ID}" \
             --team-id "${APPLE_TEAM_ID}" \
             --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
             --keychain "${keychain_path}"
 
+          echo "APPLE_CODESIGN_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
           echo "APPLE_NOTARY_KEYCHAIN_PROFILE=${notary_profile}" >> "${GITHUB_ENV}"
           echo "APPLE_NOTARY_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
 
