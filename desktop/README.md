@@ -59,9 +59,10 @@ checkout com `VOIDR_CAPTURE_DEV_APP_DIR=/caminho/absoluto/voidr-app/desktop`.
 
 ## Release macOS para clientes
 
-O workflow `Capture Desktop release` gera o pacote Apple Silicon, assina o app e o DMG com
-Developer ID, notariza e valida ambos com o Gatekeeper. Ele falha fechado se qualquer credencial de
-release estiver ausente. Os secrets esperados no GitHub são apenas referenciados pelo nome:
+O workflow `Capture Desktop release` gera os pacotes Apple Silicon e Windows x64. No macOS, assina
+o app e o DMG com Developer ID, notariza e valida ambos com o Gatekeeper. O job macOS falha fechado
+se qualquer credencial de release estiver ausente; o job Windows é independente. Os secrets Apple
+esperados no GitHub são apenas referenciados pelo nome:
 
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`;
 - `MACOS_CERTIFICATE_P12_BASE64` e `MACOS_CERTIFICATE_PASSWORD`.
