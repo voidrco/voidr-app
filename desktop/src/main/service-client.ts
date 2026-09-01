@@ -690,13 +690,23 @@ export class VoidrServiceClient {
       const indexedThrough = Number(
         readiness?.indexedThrough ?? value.indexedThrough,
       );
+      const indexVersion = Number(
+        readiness?.indexVersion ?? value.indexVersion ?? value.ingestVersion,
+      );
       if (
         response.ok &&
         ["ready", "indexed"].includes(lastStatus) &&
-        Number.isInteger(indexedThrough) &&
-        indexedThrough >= sealedThrough
+        ((Number.isInteger(indexedThrough) && indexedThrough >= sealedThrough) ||
+          // Compatibility with collector revisions that return a successful
+          // terminal index version but omit the redundant watermark fields.
+          // The desktop already holds the durable seal receipt for this exact
+          // session, so a positive terminal index version is authoritative.
+          (!Number.isFinite(indexedThrough) &&
+            lastStatus === "indexed" &&
+            Number.isInteger(indexVersion) &&
+            indexVersion > 0))
       ) {
-        return indexedThrough;
+        return Number.isFinite(indexedThrough) ? indexedThrough : sealedThrough;
       }
       if (response.status === 409 && lastStatus === "failed") {
         throw new Error(messageFrom(value, "A indexação da Session falhou."));

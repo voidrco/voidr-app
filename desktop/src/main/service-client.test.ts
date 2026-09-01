@@ -54,6 +54,29 @@ describe("VoidrServiceClient", () => {
     );
   });
 
+  it("accepts an indexed collector response with a terminal index version", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: "collector-read-token" }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ status: "indexed", ingestVersion: 1788216612342 }),
+          { status: 200 },
+        ),
+      );
+
+    await expect(
+      new VoidrServiceClient(runtime).waitForCollectorReadiness(
+        "session-sealed",
+        "collector-api-key",
+        4,
+      ),
+    ).resolves.toBe(4);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("authenticates every production workspace request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ success: true, data: [] }), { status: 200 }),
