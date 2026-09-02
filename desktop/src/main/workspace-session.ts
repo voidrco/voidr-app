@@ -55,7 +55,7 @@ function assertTrustedWorkspaceRuntime(runtime: LocalRuntimeConfig): void {
   const staging =
     service.origin === 'https://api-staging.voidr.co' &&
     service.pathname.replace(/\/+$/, '') === '/v1' &&
-    platform.origin === 'https://platform-staging.voidr.co' &&
+    platform.origin === 'https://staging.voidr.co' &&
     platform.pathname.replace(/\/+$/, '') === '';
   if (staging) return;
 

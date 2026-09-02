@@ -40,7 +40,7 @@ const STAGING: LocalRuntimeConfig = {
   serviceUrl: 'https://api-staging.voidr.co/v1',
   collectorUrl: 'https://collector-staging.voidr.co',
   collectorScriptUrl: 'https://cdn.voidr.co/voidr-collector/staging/latest/recorder.min.js',
-  platformUrl: 'https://platform-staging.voidr.co',
+  platformUrl: 'https://staging.voidr.co',
   localAdapter: false,
   localDevKey: 'voidr-capture-staging',
   organizationId: PENDING_CAPTURE_ORGANIZATION_ID,

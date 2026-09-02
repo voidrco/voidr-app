@@ -1,7 +1,7 @@
 {
   "name": "@voidr/capture-desktop",
   "productName": "Voidr Capture",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "Voidr capture control plane for Web and Mobile",
   "license": "UNLICENSED",

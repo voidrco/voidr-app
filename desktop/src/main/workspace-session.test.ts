@@ -74,7 +74,7 @@ describe('workspace session', () => {
     const stagingRuntime = {
       ...remoteRuntime,
       serviceUrl: 'https://api-staging.voidr.co/v1',
-      platformUrl: 'https://platform-staging.voidr.co',
+      platformUrl: 'https://staging.voidr.co',
       organizationId: 'org_XpZs54aP8Oop8qUz',
     };
 
@@ -86,7 +86,7 @@ describe('workspace session', () => {
       'org_XpZs54aP8Oop8qUz',
     );
     expect(workspacePlatformLoopsUrl(stagingRuntime)).toBe(
-      'https://platform-staging.voidr.co/loops?capture=desktop',
+      'https://staging.voidr.co/loops?capture=desktop',
     );
   });
 
@@ -105,6 +105,17 @@ describe('workspace session', () => {
       ),
     ).rejects.toThrow('não é confiável');
     expect(accessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects the retired staging platform host', () => {
+    expect(() =>
+      workspacePlatformLoopsUrl({
+        ...remoteRuntime,
+        serviceUrl: 'https://api-staging.voidr.co/v1',
+        platformUrl: 'https://platform-staging.voidr.co',
+        organizationId: 'org_XpZs54aP8Oop8qUz',
+      }),
+    ).toThrow('não é confiável');
   });
 
   it('opens only the platform paired with the trusted workspace channel', () => {
