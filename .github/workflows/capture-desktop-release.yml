@@ -16,8 +16,13 @@ concurrency:
 jobs:
   macos-arm64:
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [staging, production]
     env:
       VOIDR_PUBLIC_RELEASE: '1'
+      VITE_VOIDR_CAPTURE_CHANNEL: ${{ matrix.channel }}
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -124,11 +129,11 @@ jobs:
           xcrun stapler validate "${dmg_path}"
 
       - name: Prepare private-bucket release bundle
-        run: node desktop/scripts/prepare-release.mjs --platform=mac --arch=arm64
+        run: node desktop/scripts/prepare-release.mjs --platform=mac --arch=arm64 --channel=${{ matrix.channel }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: voidr-capture-macos-arm64-signed
+          name: voidr-capture-macos-arm64-${{ matrix.channel }}-signed
           path: desktop/out/release/capture/**
           if-no-files-found: error
           retention-days: 14

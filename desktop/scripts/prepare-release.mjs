@@ -32,8 +32,14 @@ async function sha256(file) {
 
 const platform = argument('platform');
 const arch = argument('arch');
+const channel = argument('channel') ?? 'production';
 if (!['mac', 'windows', 'linux'].includes(platform) || !['arm64', 'x64'].includes(arch)) {
-  throw new Error('Usage: node prepare-release.mjs --platform=mac|windows|linux --arch=arm64|x64');
+  throw new Error(
+    'Usage: node prepare-release.mjs --platform=mac|windows|linux --arch=arm64|x64 [--channel=staging|production]',
+  );
+}
+if (!['staging', 'production'].includes(channel)) {
+  throw new Error('Release channel must be staging or production.');
 }
 
 const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
@@ -53,7 +59,8 @@ const selected = extensions.map((extension) => {
 });
 
 const platformFilename = platform === 'mac' ? 'darwin' : platform === 'windows' ? 'windows' : 'linux';
-const versionDirectory = path.join(releaseRoot, 'capture', version);
+const channelDirectory = channel === 'staging' ? path.join('capture', 'preview') : 'capture';
+const versionDirectory = path.join(releaseRoot, channelDirectory, version);
 await mkdir(versionDirectory, { recursive: true });
 
 const builds = [];
@@ -67,7 +74,7 @@ for (const { extension, source } of selected) {
     arch,
     format: extension,
     filename,
-    key: `capture/${version}/${filename}`,
+    key: `${channelDirectory}/${version}/${filename}`,
     sizeBytes: metadata.size,
     sha256: await sha256(destination),
   });
@@ -79,7 +86,7 @@ const manifest = {
   notes: 'Conexão guiada ao workspace e acesso autenticado aos Loops.',
   builds,
 };
-const manifestPath = path.join(releaseRoot, 'capture', 'latest.json');
+const manifestPath = path.join(releaseRoot, channelDirectory, 'latest.json');
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
 console.log(`Prepared ${builds.length} release artifacts and ${path.relative(repositoryRoot, manifestPath)}.`);

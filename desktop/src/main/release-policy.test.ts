@@ -1,0 +1,36 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const workflow = readFileSync(
+  fileURLToPath(new URL('../../../.github/workflows/capture-desktop-release.yml', import.meta.url)),
+  'utf8',
+);
+const publisher = readFileSync(
+  fileURLToPath(new URL('../../scripts/publish-release.mjs', import.meta.url)),
+  'utf8',
+);
+const preparer = readFileSync(
+  fileURLToPath(new URL('../../scripts/prepare-release.mjs', import.meta.url)),
+  'utf8',
+);
+
+describe('Capture macOS release policy', () => {
+  it('builds signed and notarized artifacts for staging and production', () => {
+    expect(workflow).toContain('channel: [staging, production]');
+    expect(workflow).toContain('VITE_VOIDR_CAPTURE_CHANNEL: ${{ matrix.channel }}');
+    expect(workflow).toContain('spctl --assess --type execute');
+    expect(workflow).toContain('xcrun stapler validate');
+  });
+
+  it('publishes staging under the installer channel consumed by staging service', () => {
+    expect(preparer).toContain("channel === 'staging' ? path.join('capture', 'preview') : 'capture'");
+  });
+
+  it('refuses to publish a macOS DMG without Developer ID and notarization gates', () => {
+    expect(publisher).toContain("'/usr/bin/codesign'");
+    expect(publisher).toContain("'/usr/sbin/spctl'");
+    expect(publisher).toContain("'/usr/bin/xcrun'");
+    expect(publisher).toContain("['stapler', 'validate', dmg.source]");
+  });
+});

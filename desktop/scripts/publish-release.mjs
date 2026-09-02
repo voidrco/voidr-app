@@ -88,6 +88,28 @@ if (builds.length === 0) {
   process.exit(1);
 }
 
+function verifyMacDistribution() {
+  const macBuilds = builds.filter((build) => build.platform === 'mac');
+  if (macBuilds.length === 0) return;
+  if (process.platform !== 'darwin') {
+    throw new Error('macOS releases must be verified and published from macOS.');
+  }
+  const dmg = macBuilds.find((build) => build.format === 'dmg');
+  if (!dmg) throw new Error('A signed and notarized DMG is required for a macOS release.');
+
+  execFileSync('/usr/bin/codesign', ['--verify', '--strict', '--verbose=2', dmg.source], {
+    stdio: 'inherit',
+  });
+  execFileSync(
+    '/usr/sbin/spctl',
+    ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', dmg.source],
+    { stdio: 'inherit' },
+  );
+  execFileSync('/usr/bin/xcrun', ['stapler', 'validate', dmg.source], { stdio: 'inherit' });
+}
+
+verifyMacDistribution();
+
 function gsutil(args) {
   return execFileSync('gsutil', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
