@@ -71,17 +71,32 @@ export const desktopCaptureLaunchSchema = z
     organizationId: boundedId,
     loopId: boundedId,
     cycleId: opaqueId,
+    roundId: boundedId.optional(),
+    assignmentId: boundedId.optional(),
     surface: desktopCaptureSurfaceSchema,
     access: z.enum(["organization", "participant"]).default("organization"),
-    deployment: z.enum(["local", "preview", "staging", "production"]).default("local"),
-    previewSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).optional(),
+    deployment: z
+      .enum(["local", "preview", "staging", "production"])
+      .default("local"),
+    previewSlug: z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)
+      .optional(),
   })
   .superRefine((launch, context) => {
     if (launch.deployment === "preview" && !launch.previewSlug) {
-      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is required" });
+      context.addIssue({
+        code: "custom",
+        path: ["previewSlug"],
+        message: "Preview slug is required",
+      });
     }
     if (launch.deployment !== "preview" && launch.previewSlug) {
-      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is not allowed" });
+      context.addIssue({
+        code: "custom",
+        path: ["previewSlug"],
+        message: "Preview slug is not allowed",
+      });
     }
   });
 export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
@@ -96,14 +111,25 @@ export const desktopWorkspaceLinkSchema = z
     version: z.literal(VOIDR_WORKSPACE_LINK_VERSION),
     organizationId: boundedId.regex(/^org_[A-Za-z0-9]+$/),
     deployment: z.enum(["local", "preview", "staging", "production"]),
-    previewSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).optional(),
+    previewSlug: z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)
+      .optional(),
   })
   .superRefine((link, context) => {
     if (link.deployment === "preview" && !link.previewSlug) {
-      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is required" });
+      context.addIssue({
+        code: "custom",
+        path: ["previewSlug"],
+        message: "Preview slug is required",
+      });
     }
     if (link.deployment !== "preview" && link.previewSlug) {
-      context.addIssue({ code: "custom", path: ["previewSlug"], message: "Preview slug is not allowed" });
+      context.addIssue({
+        code: "custom",
+        path: ["previewSlug"],
+        message: "Preview slug is not allowed",
+      });
     }
   });
 export type DesktopWorkspaceLink = z.infer<typeof desktopWorkspaceLinkSchema>;
@@ -119,7 +145,9 @@ export const desktopWorkspaceIdentitySchema = z.object({
     picture: trustedWebUrlSchema.nullable(),
   }),
 });
-export type DesktopWorkspaceIdentity = z.infer<typeof desktopWorkspaceIdentitySchema>;
+export type DesktopWorkspaceIdentity = z.infer<
+  typeof desktopWorkspaceIdentitySchema
+>;
 
 /** Canonical Voidr profile projected for a human-owned Cycle. */
 export const desktopCycleParticipantSchema = z.object({
@@ -138,6 +166,8 @@ export const desktopCaptureResolutionSchema = z.object({
   surface: desktopCaptureSurfaceSchema,
   loopId: boundedId,
   cycleId: opaqueId,
+  roundId: boundedId.optional(),
+  assignmentId: boundedId.optional(),
   cycleNumber: z.number().int().positive(),
   applicationId: boundedId,
   environment: boundedId,
