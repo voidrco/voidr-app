@@ -39,13 +39,14 @@ describe('desktop Loop bootstrap', () => {
   it('parses the secret-free operating-system handoff', () => {
     expect(
       parseDesktopCaptureLaunch(
-        'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1',
+        'voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&attempt=11111111-1111-4111-8111-111111111111',
       ),
     ).toEqual({
       version: 'VOIDR-CAPTURE-LAUNCH/1',
       organizationId: 'org_itau',
       loopId: 'lts_checkout',
       cycleId: '88ad0919-9754-4787-8a43-fc4bf79e52bd',
+      attemptId: '11111111-1111-4111-8111-111111111111',
       surface: 'web',
       access: 'organization',
       deployment: 'local',

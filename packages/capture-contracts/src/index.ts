@@ -71,6 +71,7 @@ export const desktopCaptureLaunchSchema = z
     organizationId: boundedId,
     loopId: boundedId,
     cycleId: opaqueId,
+    attemptId: opaqueId.optional(),
     surface: desktopCaptureSurfaceSchema,
     access: z.enum(["organization", "participant"]).default("organization"),
     deployment: z.enum(["local", "preview", "staging", "production"]).default("local"),

@@ -48,10 +48,10 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     segments[0] !== 'loops' ||
     segments[2] !== 'cycles' ||
     keys.length < 3 ||
-    keys.length > 6 ||
+    keys.length > 7 ||
     new Set(keys).size !== keys.length ||
     keys.some((key) =>
-      !['organization', 'surface', 'v', 'access', 'deployment', 'preview'].includes(key),
+      !['organization', 'surface', 'v', 'access', 'deployment', 'preview', 'attempt'].includes(key),
     ) ||
     (url.searchParams.has('access') && url.searchParams.get('access') !== 'participant') ||
     (url.searchParams.has('deployment') &&
@@ -67,6 +67,7 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
     organizationId: url.searchParams.get('organization'),
     loopId: segments[1],
     cycleId: segments[3],
+    attemptId: url.searchParams.get('attempt') ?? undefined,
     surface: url.searchParams.get('surface'),
     access: url.searchParams.get('access') ?? 'organization',
     deployment: url.searchParams.get('deployment') ?? 'local',

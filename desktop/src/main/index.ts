@@ -11,6 +11,7 @@ import {
   PENDING_CAPTURE_ORGANIZATION_ID,
   prepareWebInputSchema,
   type DesktopCaptureLaunch,
+  type CaptureStatus,
   type DesktopWorkspaceIdentity,
   type DesktopWorkspaceLink,
 } from '@voidr/capture-contracts';
@@ -32,6 +33,13 @@ import {
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
 const isAutomation = !app.isPackaged && process.env.VOIDR_CAPTURE_E2E === '1';
+const developmentUserDataDir = process.env.VOIDR_CAPTURE_DEV_USER_DATA_DIR;
+if (!app.isPackaged && developmentUserDataDir && path.isAbsolute(developmentUserDataDir)) {
+  // Keep source-checkout smoke tests isolated from an installed Capture. This
+  // also gives the development instance its own single-instance lock without
+  // touching the user's production session or ledger.
+  app.setPath('userData', path.resolve(developmentUserDataDir));
+}
 const TOP_BAR_HEIGHT = 58;
 const CAPTURE_DOCK_HEIGHT = 94;
 const controlPanelModeSchema = z.enum([
@@ -61,6 +69,15 @@ let launchAcceptanceFlight: Promise<unknown> | undefined;
 const loopParticipantAuth = new LoopParticipantAuthSession();
 const workspaceIdentities = new Map<string, DesktopWorkspaceIdentity>();
 let launchAcceptanceKey: string | undefined;
+let activeCaptureAttempt:
+  | {
+      client: VoidrServiceClient;
+      launch: DesktopCaptureLaunch;
+      remoteAccessToken?: string;
+      lastReported?: string;
+      tail: Promise<void>;
+    }
+  | undefined;
 let controlPanelMode: ControlPanelMode = 'default';
 let appIsQuitting = false;
 let selectionEscapeGuards = 0;
@@ -155,6 +172,38 @@ function publishPendingWorkspaceLink(): void {
   if (pendingWorkspaceLink && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('workspace:link-received', pendingWorkspaceLink);
   }
+}
+
+function canonicalAttemptState(status: CaptureStatus) {
+  if (status.stage === 'preparing' || status.stage === 'ready') return 'preparing' as const;
+  if (status.stage === 'recording') return 'recording' as const;
+  if (['stopping', 'sealed', 'attaching'].includes(status.stage)) return 'finalizing' as const;
+  if (status.stage === 'processing') return 'processing' as const;
+  if (status.stage === 'ready_for_review') return 'ready_for_review' as const;
+  if (status.stage === 'recoverable_error') return 'recoverable_error' as const;
+  if (status.stage === 'terminal_error') return 'terminal_error' as const;
+  return undefined;
+}
+
+function reportCaptureAttempt(status: CaptureStatus): void {
+  const reporter = activeCaptureAttempt;
+  const state = canonicalAttemptState(status);
+  if (!reporter || !state) return;
+  reporter.tail = reporter.tail
+    .then(async () => {
+      const key = `${state}:${status.errorCode ?? ''}`;
+      if (reporter.lastReported === key) return;
+      await reporter.client.reportDesktopLaunchState(
+        reporter.launch,
+        state,
+        reporter.remoteAccessToken,
+        status.errorCode,
+      );
+      reporter.lastReported = key;
+    })
+    // Attempt telemetry must never interrupt a recording. A later status
+    // transition retries through the same serialized channel.
+    .catch(() => undefined);
 }
 
 function revealMainWindow(): void {
@@ -326,6 +375,21 @@ function registerIpc(): void {
               ? parsed.launch.organizationId
               : undefined,
           );
+      await client.claimDesktopLaunch(
+        parsed.launch,
+        {
+          appVersion: app.getVersion(),
+          appPlatform: process.platform as 'darwin' | 'win32' | 'linux',
+          appArch: process.arch,
+        },
+        remoteToken,
+      );
+      activeCaptureAttempt = {
+        client,
+        launch: parsed.launch,
+        ...(remoteToken ? { remoteAccessToken: remoteToken } : {}),
+        tail: Promise.resolve(),
+      };
       const handoff = await client.resolveDesktopLaunch(
         parsed.launch,
         remoteToken,
@@ -624,6 +688,7 @@ async function createWindow(): Promise<void> {
     ledger,
     annotationOutbox,
     (status) => {
+      reportCaptureAttempt(status);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('capture:status-changed', status);
       }

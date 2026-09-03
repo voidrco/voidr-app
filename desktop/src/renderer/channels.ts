@@ -17,10 +17,12 @@ export type CaptureChannel = 'local' | 'preview' | 'staging' | 'production';
 
 /** Replaced by the deep link before any request that needs a real tenant. */
 const LOCAL: LocalRuntimeConfig = {
-  serviceUrl: 'http://127.0.0.1:3000/v1',
-  collectorUrl: 'http://localhost:3100',
-  collectorScriptUrl: 'http://localhost:8889/dist/recorder.min.js',
-  platformUrl: 'http://localhost:3030',
+  serviceUrl: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_SERVICE_URL || 'http://127.0.0.1:3000/v1',
+  collectorUrl: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_COLLECTOR_URL || 'http://localhost:3100',
+  collectorScriptUrl:
+    import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_COLLECTOR_SCRIPT_URL ||
+    'http://localhost:8889/dist/recorder.min.js',
+  platformUrl: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_PLATFORM_URL || 'http://localhost:3030',
   localAdapter: true,
   localDevKey: 'voidr-verification-local',
   organizationId: 'org_verification_local',

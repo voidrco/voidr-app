@@ -99,6 +99,9 @@ export interface SecretWebAuthorization {
 type Json = Record<string, unknown>;
 const MAX_CONTROL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const VOICE_INGEST_TIMEOUT_MS = 75_000;
+const COLLECTOR_INDEX_BUDGET_MS = 1_500;
+const COLLECTOR_INDEX_REQUEST_TIMEOUT_MS = 5_000;
+const COLLECTOR_INDEX_POLL_INTERVAL_MS = 750;
 
 export class VoidrApiError extends Error {
   constructor(
@@ -531,6 +534,62 @@ export class VoidrServiceClient {
     return handoff;
   }
 
+  async claimDesktopLaunch(
+    launchInput: unknown,
+    app: {
+      appVersion: string;
+      appPlatform: 'darwin' | 'win32' | 'linux';
+      appArch: string;
+    },
+    remoteAccessToken?: string,
+  ): Promise<void> {
+    const launch = desktopCaptureLaunchSchema.parse(launchInput);
+    // Participant acknowledgment will use its dedicated narrow controller in
+    // the next compatibility slice. Old launch descriptors also remain valid.
+    if (!launch.attemptId || launch.access === 'participant') return;
+    await jsonRequest(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(launch.loopId)}` +
+        `/cycles/${encodeURIComponent(launch.cycleId)}/capture-attempts/${encodeURIComponent(launch.attemptId)}/claim`,
+      {
+        method: 'POST',
+        headers: {
+          ...this.workspaceHeaders(remoteAccessToken),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(app),
+      },
+    );
+  }
+
+  async reportDesktopLaunchState(
+    launchInput: unknown,
+    state:
+      | 'preparing'
+      | 'recording'
+      | 'finalizing'
+      | 'processing'
+      | 'ready_for_review'
+      | 'recoverable_error'
+      | 'terminal_error',
+    remoteAccessToken?: string,
+    errorCode?: string,
+  ): Promise<void> {
+    const launch = desktopCaptureLaunchSchema.parse(launchInput);
+    if (!launch.attemptId || launch.access === 'participant') return;
+    await jsonRequest(
+      `${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(launch.loopId)}` +
+        `/cycles/${encodeURIComponent(launch.cycleId)}/capture-attempts/${encodeURIComponent(launch.attemptId)}/events`,
+      {
+        method: 'POST',
+        headers: {
+          ...this.workspaceHeaders(remoteAccessToken),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ state, ...(errorCode ? { errorCode } : {}) }),
+      },
+    );
+  }
+
   async validateWebLaunch(
     launch: SecretLoopLaunch,
     lifecycleGeneration: string,
@@ -671,19 +730,36 @@ export class VoidrServiceClient {
     const deadline = Date.now() + timeoutMs;
     let lastStatus = "pending";
     while (Date.now() < deadline) {
-      const response = await fetch(
-        `${this.runtime.collectorUrl}/sessions/${encodeURIComponent(sessionId)}/ensure-indexed`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
+      let response: Response;
+      try {
+        response = await fetch(
+          `${this.runtime.collectorUrl}/sessions/${encodeURIComponent(sessionId)}/ensure-indexed?budgetMs=${COLLECTOR_INDEX_BUDGET_MS}`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            // Keep the body for compatibility with collector revisions that
+            // accepted the budget there. The current endpoint reads the query.
+            body: JSON.stringify({ budgetMs: COLLECTOR_INDEX_BUDGET_MS }),
+            redirect: "error",
+            signal: AbortSignal.timeout(COLLECTOR_INDEX_REQUEST_TIMEOUT_MS),
           },
-          body: JSON.stringify({ budgetMs: 1_500 }),
-          redirect: "error",
-          signal: AbortSignal.timeout(5_000),
-        },
-      );
+        );
+      } catch (error) {
+        // A claimed ingest can outlive one HTTP request while continuing on
+        // the server. Treat that request timeout/network interruption as a
+        // polling miss and keep checking until the outer readiness budget.
+        lastStatus =
+          error instanceof Error && error.name === "TimeoutError"
+            ? "request-timeout"
+            : "request-error";
+        await new Promise((resolve) =>
+          setTimeout(resolve, COLLECTOR_INDEX_POLL_INTERVAL_MS),
+        );
+        continue;
+      }
       const value = await boundedJson(response);
       lastStatus = typeof value.status === "string" ? value.status : lastStatus;
       const readiness = value.readinessToken as Json | undefined;
@@ -711,7 +787,9 @@ export class VoidrServiceClient {
       if (response.status === 409 && lastStatus === "failed") {
         throw new Error(messageFrom(value, "A indexação da Session falhou."));
       }
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise((resolve) =>
+        setTimeout(resolve, COLLECTOR_INDEX_POLL_INTERVAL_MS),
+      );
     }
     throw new Error(`A indexação não confirmou o watermark (${lastStatus}).`);
   }
