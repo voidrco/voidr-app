@@ -39,13 +39,14 @@ describe("desktop Loop bootstrap", () => {
   it("parses the secret-free operating-system handoff", () => {
     expect(
       parseDesktopCaptureLaunch(
-        "voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1",
+        "voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&attempt=11111111-1111-4111-8111-111111111111",
       ),
     ).toEqual({
       version: "VOIDR-CAPTURE-LAUNCH/1",
       organizationId: "org_itau",
       loopId: "lts_checkout",
       cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+      attemptId: "11111111-1111-4111-8111-111111111111",
       surface: "web",
       access: "organization",
       deployment: "local",
@@ -80,6 +81,44 @@ describe("desktop Loop bootstrap", () => {
     expect(JSON.stringify(parsed)).not.toMatch(
       /api-preview|collector-staging|https?:/i,
     );
+  });
+
+  it("accepts capture attempts and revalidation together with all preview participant parameters", () => {
+    const parsed = parseDesktopCaptureLaunch(
+      "voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1&deployment=preview&preview=release-capture&access=participant&attempt=11111111-1111-4111-8111-111111111111&round=lr_2&assignment=lra_7",
+    );
+    expect(parsed).toEqual({
+      version: "VOIDR-CAPTURE-LAUNCH/1",
+      organizationId: "org_itau",
+      loopId: "lts_checkout",
+      cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+      surface: "web",
+      deployment: "preview",
+      previewSlug: "release-capture",
+      access: "participant",
+      attemptId: "11111111-1111-4111-8111-111111111111",
+      roundId: "lr_2",
+      assignmentId: "lra_7",
+    });
+    expect(JSON.stringify(parsed)).not.toMatch(
+      /token|secret|authorization|https?:/i,
+    );
+  });
+
+  it("rejects duplicate or invalid attempt and revalidation parameters", () => {
+    const base =
+      "voidr://capture/loops/lts_checkout/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd?organization=org_itau&surface=web&v=1";
+    for (const query of [
+      "&attempt=not-a-uuid&round=lr_2&assignment=lra_7",
+      "&attempt=11111111-1111-4111-8111-111111111111&round=&assignment=lra_7",
+      "&attempt=11111111-1111-4111-8111-111111111111&round=lr_2&assignment=",
+      "&attempt=11111111-1111-4111-8111-111111111111&attempt=22222222-2222-4222-8222-222222222222",
+      "&round=lr_2&round=lr_3&assignment=lra_7",
+      "&round=lr_2&assignment=lra_7&assignment=lra_8",
+      "&attempt=11111111-1111-4111-8111-111111111111&round=lr_2&assignment=lra_7&token=secret",
+    ]) {
+      expect(() => parseDesktopCaptureLaunch(base + query)).toThrow();
+    }
   });
 
   it("accepts a staging launch without carrying endpoints", () => {

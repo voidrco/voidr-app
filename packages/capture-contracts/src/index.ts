@@ -71,6 +71,7 @@ export const desktopCaptureLaunchSchema = z
     organizationId: boundedId,
     loopId: boundedId,
     cycleId: opaqueId,
+    attemptId: opaqueId.optional(),
     roundId: boundedId.optional(),
     assignmentId: boundedId.optional(),
     surface: desktopCaptureSurfaceSchema,

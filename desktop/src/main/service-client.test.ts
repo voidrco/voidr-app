@@ -11,7 +11,10 @@ const runtime = {
   organizationId: "org_verification_local",
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("VoidrServiceClient", () => {
   it("projects the canonical workspace logo, name and signed-in user from auth/me", async () => {
@@ -75,6 +78,38 @@ describe("VoidrServiceClient", () => {
       ),
     ).resolves.toBe(4);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:3100/sessions/session-sealed/ensure-indexed?budgetMs=1500",
+    );
+  });
+
+  it("keeps polling when a claimed ingest outlives one HTTP request", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: "collector-read-token" }), { status: 200 }),
+      )
+      .mockRejectedValueOnce(new DOMException("The operation timed out", "TimeoutError"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "ready",
+            readinessToken: { indexedThrough: 7, indexVersion: 2 },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const readiness = new VoidrServiceClient(runtime).waitForCollectorReadiness(
+      "session-slow-index",
+      "collector-api-key",
+      7,
+    );
+    await vi.advanceTimersByTimeAsync(750);
+
+    await expect(readiness).resolves.toBe(7);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("authenticates every production workspace request", async () => {
@@ -407,6 +442,51 @@ describe("VoidrServiceClient", () => {
     );
   });
 
+  it("claims and reports the canonical capture attempt without exposing a credential in the link", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ success: true, data: { state: "app_claimed" } }), {
+        status: 200,
+      }),
+    );
+    const client = new VoidrServiceClient(runtime);
+    const launch = {
+      version: "VOIDR-CAPTURE-LAUNCH/1" as const,
+      organizationId: "org_verification_local",
+      loopId: "lts_itau_agro",
+      cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+      attemptId: "11111111-1111-4111-8111-111111111111",
+      roundId: "lr_2",
+      assignmentId: "lra_7",
+      surface: "web" as const,
+      access: "organization" as const,
+      deployment: "local" as const,
+    };
+
+    await client.claimDesktopLaunch(launch, {
+      appVersion: "0.1.13",
+      appPlatform: "darwin",
+      appArch: "arm64",
+    });
+    await client.reportDesktopLaunchState(launch, "recording");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3000/v1/loop-test-dev/scenarios/lts_itau_agro/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd/capture-attempts/11111111-1111-4111-8111-111111111111/claim",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/capture-attempts/11111111-1111-4111-8111-111111111111/events");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        appVersion: "0.1.13",
+        appPlatform: "darwin",
+        appArch: "arm64",
+      }),
+    });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ state: "recording" }),
+    });
+  });
+
   it("uses the participant audience only for a participant-marked desktop handoff", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -497,12 +577,15 @@ describe("VoidrServiceClient", () => {
       localAdapter: false,
     };
 
-    await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
+    const handoff = await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
       {
         version: "VOIDR-CAPTURE-LAUNCH/1",
         organizationId: "org_production",
         loopId: "lts_production",
         cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+        attemptId: "11111111-1111-4111-8111-111111111111",
+        roundId: "lr_2",
+        assignmentId: "lra_7",
         surface: "web",
         access: "organization",
         deployment: "production",
@@ -510,6 +593,10 @@ describe("VoidrServiceClient", () => {
       "organization-access-token",
     );
 
+    expect(handoff).toMatchObject({
+      roundId: "lr_2",
+      assignmentId: "lra_7",
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.voidr.co/v1/loop-test/scenarios/lts_production/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd/capture-handoff",
       expect.objectContaining({
