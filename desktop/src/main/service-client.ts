@@ -287,21 +287,28 @@ export class VoidrServiceClient {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
   }
 
-  async workspaceIdentity(remoteAccessToken: string): Promise<DesktopWorkspaceIdentity> {
-    const value = await jsonRequest<Json>(`${this.runtime.serviceUrl}/auth/me`, {
-      headers: { Authorization: `Bearer ${remoteAccessToken}` },
-    });
+  async workspaceIdentity(
+    remoteAccessToken: string,
+  ): Promise<DesktopWorkspaceIdentity> {
+    const value = await jsonRequest<Json>(
+      `${this.runtime.serviceUrl}/auth/me`,
+      {
+        headers: { Authorization: `Bearer ${remoteAccessToken}` },
+      },
+    );
     const organization = record(value.organization);
     const organizationId = stringValue(
       value.organizationId ?? organization.id,
-      '',
+      "",
       200,
     );
-    const email = stringValue(value.email, '', 320);
+    const email = stringValue(value.email, "", 320);
     return desktopWorkspaceIdentitySchema.parse({
       organizationId,
       name: stringValue(
-        organization.displayName ?? organization.display_name ?? organization.name,
+        organization.displayName ??
+          organization.display_name ??
+          organization.name,
         organizationId,
         200,
       ),
@@ -514,6 +521,8 @@ export class VoidrServiceClient {
     );
     const handoff = desktopHandoffSchema.parse({
       ...value,
+      roundId: launch.roundId,
+      assignmentId: launch.assignmentId,
       participant: participantIdentity(value.participant),
       cycleStartedAt: isoDate(value.cycleStartedAt),
     });
@@ -772,7 +781,8 @@ export class VoidrServiceClient {
       if (
         response.ok &&
         ["ready", "indexed"].includes(lastStatus) &&
-        ((Number.isInteger(indexedThrough) && indexedThrough >= sealedThrough) ||
+        ((Number.isInteger(indexedThrough) &&
+          indexedThrough >= sealedThrough) ||
           // Compatibility with collector revisions that return a successful
           // terminal index version but omit the redundant watermark fields.
           // The desktop already holds the durable seal receipt for this exact
@@ -888,7 +898,9 @@ export class VoidrServiceClient {
   private workspaceHeaders(remoteAccessToken?: string): Record<string, string> {
     if (this.runtime.localAdapter) return this.localHeaders();
     if (!remoteAccessToken) {
-      throw new Error('Conecte sua conta Voidr antes de carregar este workspace.');
+      throw new Error(
+        "Conecte sua conta Voidr antes de carregar este workspace.",
+      );
     }
     return { Authorization: `Bearer ${remoteAccessToken}` };
   }

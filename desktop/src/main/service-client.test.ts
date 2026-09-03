@@ -455,6 +455,8 @@ describe("VoidrServiceClient", () => {
       loopId: "lts_itau_agro",
       cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
       attemptId: "11111111-1111-4111-8111-111111111111",
+      roundId: "lr_2",
+      assignmentId: "lra_7",
       surface: "web" as const,
       access: "organization" as const,
       deployment: "local" as const,
@@ -575,12 +577,15 @@ describe("VoidrServiceClient", () => {
       localAdapter: false,
     };
 
-    await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
+    const handoff = await new VoidrServiceClient(remoteRuntime).resolveDesktopLaunch(
       {
         version: "VOIDR-CAPTURE-LAUNCH/1",
         organizationId: "org_production",
         loopId: "lts_production",
         cycleId: "88ad0919-9754-4787-8a43-fc4bf79e52bd",
+        attemptId: "11111111-1111-4111-8111-111111111111",
+        roundId: "lr_2",
+        assignmentId: "lra_7",
         surface: "web",
         access: "organization",
         deployment: "production",
@@ -588,6 +593,10 @@ describe("VoidrServiceClient", () => {
       "organization-access-token",
     );
 
+    expect(handoff).toMatchObject({
+      roundId: "lr_2",
+      assignmentId: "lra_7",
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.voidr.co/v1/loop-test/scenarios/lts_production/cycles/88ad0919-9754-4787-8a43-fc4bf79e52bd/capture-handoff",
       expect.objectContaining({

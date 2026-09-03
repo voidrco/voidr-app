@@ -105,7 +105,9 @@ describe("desktop experience contract", () => {
   });
 
   it("makes Loops the operational Home with real tests, participants and evidence", () => {
-    expect(appSource).toContain("useState<'loops' | 'capture'>('loops')");
+    expect(appSource).toMatch(
+      /useState<["']loops["']\s*\|\s*["']capture["']>\(["']loops["']\)/,
+    );
     expect(appSource).toContain("<WorkspaceHome");
     expect(workspaceSource).toContain("workspace.listLoops(runtime)");
     expect(workspaceSource).toMatch(
@@ -146,8 +148,10 @@ describe("desktop experience contract", () => {
   it("keeps the workspace scoped to the deployment and organization carried by a launch", () => {
     expect(appSource).toContain("runtimeForDeployment(");
     expect(appSource).toContain("launch.organizationId");
-    expect(appSource).toContain("capture.acceptLaunch(launch, launchRuntime)");
-    expect(appSource).toContain('Este convite não está mais disponível.');
+    expect(appSource).toMatch(
+      /capture\.acceptLaunch\(\s*launch,\s*launchRuntime,?\s*\)/,
+    );
+    expect(appSource).toContain("Este convite não está mais disponível.");
     expect(appSource).toContain("setRuntime(launchRuntime)");
   });
 
@@ -155,8 +159,8 @@ describe("desktop experience contract", () => {
     expect(mainSource).toContain(
       "if (status.stage === 'ready') status = await webCapture!.start()",
     );
-    expect(appSource).toContain(
-      "cycleParticipantLabel(cycleParticipant, cycleStartedAt)",
+    expect(appSource).toMatch(
+      /cycleParticipantLabel\(\s*cycleParticipant,\s*cycleStartedAt,?\s*\)/,
     );
     expect(appSource).toContain(
       "A captura começou automaticamente e o tempo já está contando.",
@@ -171,7 +175,9 @@ describe("desktop experience contract", () => {
   });
 
   it("claims harness receipt only after the authoritative acknowledgement", () => {
-    expect(appSource).toContain("harnessDeliveryState === 'acknowledged'");
+    expect(appSource).toMatch(
+      /harnessDeliveryState\s*===\s*["']acknowledged["']/,
+    );
     expect(appSource).toContain("recebeu o contexto citado");
     expect(appSource).toContain(
       "Aguardando o ${agentName} confirmar o contexto",
@@ -182,7 +188,9 @@ describe("desktop experience contract", () => {
   });
 
   it("reserves native target space for notes and captured-context details", () => {
-    expect(appSource).toContain("capture.setControlPanel(controlPanelMode)");
+    expect(appSource).toMatch(
+      /capture\s*\.setControlPanel\(\s*controlPanelMode,?\s*\)/,
+    );
     expect(appSource).toContain("capture-shell-note");
     expect(appSource).toContain("capture-shell-evidence");
     expect(appSource).toContain("<EvidenceInspector");
@@ -211,13 +219,13 @@ describe("desktop experience contract", () => {
     expect(appSource).toContain("Só será enviada quando você confirmar.");
     expect(appSource).toContain("Gravar novamente");
     expect(appSource).toContain("Tentar novamente");
-    expect(appSource).toContain("stopVoiceRef.current('escape')");
+    expect(appSource).toMatch(/stopVoiceRef\.current\(["']escape["']\)/);
     expect(appSource).toContain("protectVoicePending");
     expect(appSource).toContain("Área da tela (opcional)");
     expect(appSource).toContain("Selecionar área");
     expect(appSource).toContain("Área selecionada");
     expect(appSource).toContain("Não identificamos fala nessa gravação");
-    expect(appSource).toContain("capture.selectVoiceRegion(attempt)");
+    expect(appSource).toMatch(/capture\.selectVoiceRegion\(\s*attempt,?\s*\)/);
     expect(appSource).toContain("capture.clearVoiceRegion()");
     expect(appSource).toContain("voiceVisualMatchesSelection");
     expect(appSource).toContain("visualLocked");
@@ -227,15 +235,13 @@ describe("desktop experience contract", () => {
   });
 
   it("matches the extension contract for element, region and screen notes", () => {
-    expect(appSource).toContain(
-      "onClick={() => void beginAnnotation('element')}",
-    );
-    expect(appSource).toContain(
-      "onClick={() => void beginAnnotation('region')}",
-    );
-    expect(appSource).toContain(
-      "onClick={() => void beginAnnotation('screen')}",
-    );
+    for (const kind of ["element", "region", "screen"]) {
+      expect(appSource).toMatch(
+        new RegExp(
+          `onClick=\\{\\(\\) => void beginAnnotation\\(["']${kind}["']\\)\\}`,
+        ),
+      );
+    }
     expect(appSource).toContain("capture.selectElement()");
     expect(appSource).toContain("capture.selectRegion()");
     expect(appSource).toContain("O que deve ser investigado?");
@@ -243,8 +249,12 @@ describe("desktop experience contract", () => {
       "Inclua esperado × observado quando ajudar · Enter salva",
     );
     expect(appSource).toContain("Salvar anotação");
-    expect(appSource).toContain("disabled={busy || annotationSaving || !note.trim()}");
-    expect(appSource).toContain("Você pode continuar o teste enquanto sincronizamos em segundo plano.");
+    expect(appSource).toContain(
+      "disabled={busy || annotationSaving || !note.trim()}",
+    );
+    expect(appSource).toContain(
+      "Você pode continuar o teste enquanto sincronizamos em segundo plano.",
+    );
     expect(appSource).toContain("Nota protegida neste dispositivo");
     expect(preloadSource).toContain("onAnnotationSync");
     expect(appSource).toContain("capture.clearSelection()");
@@ -267,8 +277,8 @@ describe("desktop experience contract", () => {
       expect(annotationFlowSource).toContain(`phase: '${phase}'`);
     }
     expect(appSource).toContain("annotationSaveInFlight.current");
-    expect(appSource).toContain(
-      "annotationFlowRef.current.phase === 'choosing' ? 'closed' : 'choosing'",
+    expect(appSource).toMatch(
+      /annotationFlowRef\.current\.phase\s*===\s*["']choosing["']\s*\?\s*["']closed["']\s*:\s*["']choosing["']/,
     );
     expect(appSource).toContain("capture.onTargetPointerDown");
     expect(appSource).toContain("Você tem uma nota não salva");
@@ -281,7 +291,7 @@ describe("desktop experience contract", () => {
   });
 
   it("makes every automatic evidence category inspectable from the recording dock", () => {
-    expect(appSource).toContain("label: 'Requisições'");
+    expect(appSource).toMatch(/label:\s*["']Requisições["']/);
     expect(appSource).toContain("title={`Ver ${label.toLowerCase()}`}");
     expect(appSource).toContain("signal.category === evidenceOpen");
     expect(appSource).toContain("método, status e duração");
@@ -296,7 +306,7 @@ describe("desktop experience contract", () => {
     ]) {
       expect(presentationSource).toContain(label);
     }
-    expect(appSource).toContain("stage === 'stopping' ? 0");
+    expect(appSource).toMatch(/stage\s*===\s*["']stopping["']\s*\?\s*0/);
     expect(appSource).toContain("elapsedMs >= 15_000");
     expect(appSource).toContain("Captura segura.");
     expect(styleSource).toContain(".finalization-step.active");
