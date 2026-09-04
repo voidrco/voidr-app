@@ -48,4 +48,11 @@ describe('Capture macOS release policy', () => {
       publishWorkflow.lastIndexOf('cp release/capture/latest.json'),
     );
   });
+
+  it('keeps channel-specific build configuration out of channel contract tests', () => {
+    expect(publishWorkflow).not.toMatch(
+      /env:\n\s+VITE_VOIDR_CAPTURE_CHANNEL: production\n\s+CSC_IDENTITY_AUTO_DISCOVERY/,
+    );
+    expect(publishWorkflow.match(/VITE_VOIDR_CAPTURE_CHANNEL: production/g)).toHaveLength(2);
+  });
 });
