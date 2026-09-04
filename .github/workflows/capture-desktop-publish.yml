@@ -25,7 +25,6 @@ jobs:
     outputs:
       apple_signed: ${{ steps.signing.outputs.apple_signed }}
     env:
-      VITE_VOIDR_CAPTURE_CHANNEL: production
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -91,6 +90,8 @@ jobs:
       - run: npm run capture:typecheck
       - run: npm run test:capture
       - run: npm run make --workspace @voidr/capture-desktop -- --arch=arm64
+        env:
+          VITE_VOIDR_CAPTURE_CHANNEL: production
 
       - name: Verify macOS artifact
         shell: bash
@@ -120,7 +121,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
     runs-on: windows-latest
     env:
-      VITE_VOIDR_CAPTURE_CHANNEL: production
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +132,8 @@ jobs:
       - run: npm run capture:typecheck
       - run: npm run test:capture
       - run: npm run make --workspace @voidr/capture-desktop -- --arch=x64
+        env:
+          VITE_VOIDR_CAPTURE_CHANNEL: production
       - run: node desktop/scripts/prepare-release.mjs --platform=windows --arch=x64 --channel=production
       - uses: actions/upload-artifact@v4
         with:
