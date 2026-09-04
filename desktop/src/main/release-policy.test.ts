@@ -39,7 +39,7 @@ describe('Capture macOS release policy', () => {
   });
 
   it('publishes a complete release after a merge into the production branch', () => {
-    expect(publishWorkflow).toContain('- feature/loop-test');
+    expect(publishWorkflow).toContain("github.ref_name == github.event.repository.default_branch");
     expect(publishWorkflow).toContain('needs: [macos-arm64, windows-x64]');
     expect(publishWorkflow).toContain('assemble-release.mjs');
     expect(publishWorkflow).toContain('validate-release-transition.mjs');
