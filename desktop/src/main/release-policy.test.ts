@@ -43,9 +43,10 @@ describe('Capture macOS release policy', () => {
     expect(publishWorkflow).toContain('needs: [macos-arm64, windows-x64]');
     expect(publishWorkflow).toContain('assemble-release.mjs');
     expect(publishWorkflow).toContain('validate-release-transition.mjs');
-    expect(publishWorkflow).toContain('gs://${BUCKET}/capture/latest.json');
-    expect(publishWorkflow.indexOf('cp "${source}"')).toBeLessThan(
-      publishWorkflow.lastIndexOf('cp release/capture/latest.json'),
+    expect(publishWorkflow).toContain('https://storage.googleapis.com/${BUCKET}/${key}');
+    expect(publishWorkflow).not.toContain('gsutil');
+    expect(publishWorkflow.indexOf('while IFS=')).toBeLessThan(
+      publishWorkflow.lastIndexOf("upload_object release/capture/latest.json capture/latest.json 'application/json'"),
     );
   });
 
