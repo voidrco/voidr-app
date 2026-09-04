@@ -83,6 +83,64 @@ describe("VoidrServiceClient", () => {
     );
   });
 
+  it("reads the production compatibility contract before capture starts", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: {
+        status: "update_available",
+        compatible: true,
+        updateAvailable: true,
+        appVersion: "0.1.15",
+        latestVersion: "0.1.16",
+        minimumSupportedVersion: "0.1.14",
+        hostProtocol: "CAPTURE-HOST/1",
+        collectorContract: { readinessMethod: "isCaptureReady", version: 1 },
+        environment: "production",
+      } }), { status: 200 }),
+    );
+
+    await expect(
+      new VoidrServiceClient(runtime).captureCompatibility("0.1.15", "CAPTURE-HOST/1"),
+    ).resolves.toMatchObject({ compatible: true, updateAvailable: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3000/v1/capture/compatibility?appVersion=0.1.15&hostProtocol=CAPTURE-HOST%2F1",
+    );
+  });
+
+  it("rejects a collector bundle without the readiness contract in doctor", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      return new Response(url.includes("recorder.min.js") ? "window.rrweb = {}" : "ok", {
+        status: 200,
+      });
+    });
+
+    const checks = await new VoidrServiceClient(runtime).doctor();
+    expect(checks.find((check) => check.service === "Collector script")).toMatchObject({
+      ok: false,
+      detail: "Collector incompatível: isCaptureReady ausente",
+    });
+  });
+
+  it("requests a signed update with the workspace bearer token", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: {
+        url: "https://storage.example/voidr-capture.dmg",
+        filename: "voidr-capture-0.1.16-darwin-arm64.dmg",
+        version: "0.1.16",
+        sha256: "a".repeat(64),
+        expiresAt: "2026-09-03T21:00:00.000Z",
+      } }), { status: 200 }),
+    );
+
+    await new VoidrServiceClient(runtime).captureUpdateDownload(
+      "mac", "arm64", "workspace-token",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:3000/v1/capture/download?platform=mac&arch=arm64",
+      expect.objectContaining({ headers: { Authorization: "Bearer workspace-token" } }),
+    );
+  });
+
   it("keeps polling when a claimed ingest outlives one HTTP request", async () => {
     vi.useFakeTimers();
     const fetchMock = vi

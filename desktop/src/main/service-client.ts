@@ -77,6 +77,32 @@ const validationSchema = z.object({
     .passthrough(),
 });
 
+const captureCompatibilitySchema = z.object({
+  status: z.enum(["current", "update_available", "blocked"]),
+  compatible: z.boolean(),
+  updateAvailable: z.boolean(),
+  appVersion: z.string(),
+  latestVersion: z.string(),
+  minimumSupportedVersion: z.string(),
+  hostProtocol: z.string(),
+  collectorContract: z.object({
+    readinessMethod: z.literal("isCaptureReady"),
+    version: z.number().int().positive(),
+  }),
+  environment: z.enum(["preview", "production"]),
+});
+
+const captureDownloadSchema = z.object({
+  url: z.string().url(),
+  filename: z.string().min(1).max(200),
+  version: z.string(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  expiresAt: z.coerce.date(),
+});
+
+export type CaptureCompatibility = z.infer<typeof captureCompatibilitySchema>;
+export type CaptureUpdateDownload = z.infer<typeof captureDownloadSchema>;
+
 const desktopHandoffSchema = desktopCaptureResolutionSchema.extend({
   recordingUrl: z.string().url().max(16_384).optional(),
   recordingExpiresAt: z.coerce.date().optional(),
@@ -860,14 +886,21 @@ export class VoidrServiceClient {
             redirect: "error",
             cache: "no-store",
           });
+          let detail = `HTTP ${response.status}`;
+          let ok = response.ok;
+          if (ok && service === "Collector script") {
+            const source = await response.text();
+            ok = source.includes("isCaptureReady");
+            detail = ok
+              ? "Contrato isCaptureReady disponível"
+              : "Collector incompatível: isCaptureReady ausente";
+          }
           return {
             service,
             url,
-            ok: response.ok,
+            ok,
             latencyMs: Date.now() - started,
-            detail: response.ok
-              ? `HTTP ${response.status}`
-              : `HTTP ${response.status}`,
+            detail,
           };
         } catch (error) {
           return {
@@ -883,6 +916,34 @@ export class VoidrServiceClient {
         }
       }),
     );
+  }
+
+  async captureCompatibility(
+    appVersion: string,
+    hostProtocol: string,
+  ): Promise<CaptureCompatibility> {
+    const query = new URLSearchParams({ appVersion, hostProtocol });
+    const value = await jsonRequest(
+      `${this.runtime.serviceUrl}/capture/compatibility?${query.toString()}`,
+      { method: "GET" },
+    );
+    return captureCompatibilitySchema.parse(value);
+  }
+
+  async captureUpdateDownload(
+    platform: "mac" | "windows" | "linux",
+    arch: "arm64" | "x64",
+    accessToken: string,
+  ): Promise<CaptureUpdateDownload> {
+    const query = new URLSearchParams({ platform, arch });
+    const value = await jsonRequest(
+      `${this.runtime.serviceUrl}/capture/download?${query.toString()}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+    return captureDownloadSchema.parse(value);
   }
 
   private localHeaders(

@@ -994,8 +994,12 @@ export class WebCaptureController {
           throw new Error('A aplicação capturada foi fechada durante a navegação.');
         }
         try {
+          const trustedTargetLoad = this.#waitForTrustedTargetLoad(view);
           await withTimeout(
-            view.webContents.loadURL(nextUrl),
+            Promise.race([
+              view.webContents.loadURL(nextUrl).then(() => undefined),
+              trustedTargetLoad,
+            ]),
             TARGET_LOAD_TIMEOUT_MS,
             'A aplicação demorou demais para abrir no Voidr Capture.',
           );

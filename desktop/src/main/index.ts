@@ -1,10 +1,13 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
 import { z } from 'zod';
 import { buildLoopCodeHandoffUrl, loopCodeHandoffInputSchema } from './code-handoff';
 import {
   androidLaunchInputSchema,
+  CAPTURE_HOST_VERSION,
   desktopCaptureLaunchSchema,
   localRuntimeConfigSchema,
   mobileAttachInputSchema,
@@ -135,6 +138,35 @@ const workspaceLoopInputSchema = z.object({
 const workspaceCycleInputSchema = workspaceLoopInputSchema.extend({
   cycleId: z.string().uuid(),
 });
+
+function captureReleasePlatform(): 'mac' | 'windows' | 'linux' {
+  return process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux';
+}
+
+async function downloadAndOpenUpdate(url: string, filename: string, sha256?: string): Promise<string> {
+  const safeFilename = path.basename(filename);
+  if (safeFilename !== filename || !safeFilename) throw new Error('O instalador retornou um nome inválido.');
+  const downloadPath = path.join(app.getPath('downloads'), safeFilename);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('O download da atualização não iniciou.')), 15_000);
+    session.defaultSession.once('will-download', (_event, item) => {
+      clearTimeout(timeout);
+      item.setSavePath(downloadPath);
+      item.once('done', (_doneEvent, state) => {
+        if (state === 'completed') resolve();
+        else reject(new Error('A atualização não pôde ser baixada. Tente novamente.'));
+      });
+    });
+    session.defaultSession.downloadURL(url);
+  });
+  if (sha256) {
+    const actual = createHash('sha256').update(await readFile(downloadPath)).digest('hex');
+    if (actual !== sha256) throw new Error('A atualização baixada falhou na verificação de integridade.');
+  }
+  const openError = await shell.openPath(downloadPath);
+  if (openError) throw new Error('A atualização foi baixada, mas o instalador não pôde ser aberto.');
+  return downloadPath;
+}
 const automationTargetInputSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.enum(['keyDown', 'keyUp']),
@@ -367,6 +399,18 @@ function registerIpc(): void {
     launchAcceptanceKey = key;
     const flight = (async () => {
       const client = new VoidrServiceClient(parsed.runtime);
+      if (!parsed.runtime.localAdapter) {
+        const compatibility = await client.captureCompatibility(app.getVersion(), CAPTURE_HOST_VERSION);
+        if (!compatibility.compatible) {
+          throw new Error(
+            `Voidr Capture ${app.getVersion()} incompatível. Atualize para ${compatibility.latestVersion} antes de iniciar o teste.`,
+          );
+        }
+      }
+      const unavailable = (await client.doctor()).find((check) => !check.ok);
+      if (unavailable) {
+        throw new Error(`${unavailable.service} indisponível: ${unavailable.detail}`);
+      }
       const remoteToken = parsed.runtime.localAdapter
         ? undefined
         : await loopParticipantAuth.accessToken(
@@ -497,8 +541,75 @@ function registerIpc(): void {
     assertControlSender(event);
     const parsed = localRuntimeConfigSchema.parse(runtime);
     const client = new VoidrServiceClient(parsed);
-    const [services, android] = await Promise.all([client.doctor(), doctorAndroid()]);
-    return { services, android };
+    const [services, android, compatibility] = await Promise.all([
+      client.doctor(),
+      doctorAndroid(),
+      parsed.localAdapter
+        ? Promise.resolve({
+            status: 'current' as const,
+            compatible: true,
+            updateAvailable: false,
+            appVersion: app.getVersion(),
+            latestVersion: app.getVersion(),
+            minimumSupportedVersion: app.getVersion(),
+            hostProtocol: CAPTURE_HOST_VERSION,
+            collectorContract: { readinessMethod: 'isCaptureReady' as const, version: 1 },
+            environment: 'preview' as const,
+          })
+        : client.captureCompatibility(app.getVersion(), CAPTURE_HOST_VERSION).catch(() => ({
+            status: 'blocked' as const,
+            compatible: false,
+            updateAvailable: false,
+            appVersion: app.getVersion(),
+            latestVersion: 'indisponível',
+            minimumSupportedVersion: 'indisponível',
+            hostProtocol: CAPTURE_HOST_VERSION,
+            collectorContract: { readinessMethod: 'isCaptureReady' as const, version: 1 },
+            environment: parsed.serviceUrl.includes('preview')
+              ? ('preview' as const)
+              : ('production' as const),
+          })),
+    ]);
+    let authentication = { ok: parsed.localAdapter, detail: parsed.localAdapter ? 'Adapter local' : 'Faça login na Voidr' };
+    if (!parsed.localAdapter && parsed.organizationId !== PENDING_CAPTURE_ORGANIZATION_ID) {
+      const token = loopParticipantAuth.cachedAccessToken('organization', parsed.organizationId);
+      if (token) {
+        try {
+          const identity = await client.workspaceIdentity(token);
+          authentication = { ok: true, detail: `${identity.user.name} · ${identity.name}` };
+        } catch {
+          authentication = { ok: false, detail: 'Sessão expirada. Conecte novamente.' };
+        }
+      }
+    }
+    const blocked = !compatibility.compatible || services.some((check) => !check.ok);
+    return {
+      status: blocked ? 'blocked' : authentication.ok ? 'ready' : 'degraded',
+      app: { version: app.getVersion(), platform: process.platform, arch: process.arch },
+      compatibility,
+      authentication,
+      services,
+      android,
+    };
+  });
+  ipcMain.handle('capture:install-update', async (event, runtime) => {
+    assertControlSender(event);
+    const parsed = localRuntimeConfigSchema.parse(runtime);
+    if (parsed.localAdapter) throw new Error('Atualizações automáticas existem apenas nos canais remotos.');
+    if (parsed.organizationId === PENDING_CAPTURE_ORGANIZATION_ID) {
+      throw new Error('Conecte seu workspace antes de baixar a atualização.');
+    }
+    const client = new VoidrServiceClient(parsed);
+    const compatibility = await client.captureCompatibility(app.getVersion(), CAPTURE_HOST_VERSION);
+    if (!compatibility.updateAvailable) return { state: 'current', version: app.getVersion() };
+    const accessToken = await loopParticipantAuth.accessToken('organization', parsed.organizationId);
+    const download = await client.captureUpdateDownload(
+      captureReleasePlatform(),
+      process.arch === 'arm64' ? 'arm64' : 'x64',
+      accessToken,
+    );
+    const downloadPath = await downloadAndOpenUpdate(download.url, download.filename, download.sha256);
+    return { state: 'installer_opened', version: download.version, downloadPath };
   });
   ipcMain.handle('workspace:list-loops', async (event, runtime) => {
     assertControlSender(event);
