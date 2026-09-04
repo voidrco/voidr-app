@@ -69,6 +69,7 @@ import {
   type AnnotationKind,
 } from "./annotation-flow";
 import { cycleParticipantLabel } from "./cycle-identity";
+import { isVoidrTeamEmail } from "./diagnostic-access";
 import {
   initialVoiceFlow,
   initialVoiceVisualFlow,
@@ -277,6 +278,12 @@ function App() {
   const recording = status.stage === "recording";
   const finalizing = ["stopping", "sealed", "attaching", "processing"].includes(
     status.stage,
+  );
+  const diagnosticsAvailable = Boolean(
+    !activeCapture &&
+      homeView === "loops" &&
+      workspaceConnection === "connected" &&
+      isVoidrTeamEmail(workspaceIdentity?.user.email),
   );
   const cycleParticipant =
     status.context?.participant ?? launchResolution?.participant;
@@ -737,6 +744,10 @@ function App() {
       // diagnostic can be retried explicitly without interrupting navigation.
     });
   }, [refreshDoctor]);
+
+  useEffect(() => {
+    if (!diagnosticsAvailable) setDiagnosticsOpen(false);
+  }, [diagnosticsAvailable]);
 
   const startWorkspaceLoop = async (loopId: string) => {
     setBusy(true);
@@ -1620,6 +1631,43 @@ function App() {
     [],
   );
 
+  const topbarStatusContent = (
+    <>
+      {workspaceIdentity && !activeCapture && homeView === "loops" && (
+        <span
+          className="capture-user-avatar"
+          title={workspaceIdentity.user.name}
+          aria-hidden="true"
+        >
+          {workspaceIdentity.user.name.charAt(0).toLocaleUpperCase("pt-BR")}
+          {workspaceIdentity.user.picture && (
+            <img
+              src={workspaceIdentity.user.picture}
+              alt=""
+              referrerPolicy="no-referrer"
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+            />
+          )}
+        </span>
+      )}
+      <StatusDot live={recording} />
+      <span>
+        {!activeCapture && homeView === "loops"
+          ? workspaceConnection === "connected"
+            ? "Conectado"
+            : workspaceConnection === "connecting"
+              ? "Conectando"
+              : workspaceConnection === "error"
+                ? "Atenção necessária"
+                : "Não conectado"
+          : copy.title}
+      </span>
+      {recording && <code>{elapsed(status.elapsedMs)}</code>}
+    </>
+  );
+
   return (
     <div
       className={`capture-shell${activeCapture ? " capture-shell-active" : ""}${finalizing ? " capture-shell-finalizing" : ""}${voicePanelOpen && recording && !voiceVisualSelecting ? " capture-shell-voice" : ""}${noteOpen && recording ? " capture-shell-note" : ""}${annotationFlow.phase === "composing" && recording ? " capture-shell-note-composer" : ""}${evidenceOpen && recording ? " capture-shell-evidence" : ""}`}
@@ -1628,14 +1676,9 @@ function App() {
         <div className="capture-brand-slot">
           <VoidrBrand />
           {doctor?.app.version && (
-            <button
-              type="button"
-              className="capture-version-button"
-              onClick={() => setDiagnosticsOpen((value) => !value)}
-              title="Abrir diagnóstico do ambiente"
-            >
+            <span className="capture-version-label">
               v{doctor.app.version}
-            </button>
+            </span>
           )}
           {captureChannel !== "production" && (
             <span className="capture-environment-badge">
@@ -1691,44 +1734,34 @@ function App() {
             </span>
           )}
         </div>
-        <div className="capture-topbar-status" role="status">
-          {workspaceIdentity && !activeCapture && homeView === "loops" && (
-            <span
-              className="capture-user-avatar"
-              title={workspaceIdentity.user.name}
-              aria-hidden="true"
-            >
-              {workspaceIdentity.user.name.charAt(0).toLocaleUpperCase("pt-BR")}
-              {workspaceIdentity.user.picture && (
-                <img
-                  src={workspaceIdentity.user.picture}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  onError={(event) => {
-                    event.currentTarget.style.display = "none";
-                  }}
-                />
-              )}
-            </span>
-          )}
-          <StatusDot live={recording} />
-          <span>
-            {!activeCapture && homeView === "loops"
-              ? workspaceConnection === "connected"
-                ? "Conectado"
-                : workspaceConnection === "connecting"
-                  ? "Conectando"
-                  : workspaceConnection === "error"
-                    ? "Atenção necessária"
-                    : "Não conectado"
-              : copy.title}
-          </span>
-          {recording && <code>{elapsed(status.elapsedMs)}</code>}
-        </div>
+        {diagnosticsAvailable ? (
+          <button
+            type="button"
+            className="capture-topbar-status capture-topbar-status-button"
+            aria-expanded={diagnosticsOpen}
+            aria-controls="capture-diagnostics-panel"
+            title="Abrir diagnóstico do ambiente · Voidr Only"
+            onClick={() => {
+              setDiagnosticsOpen((value) => !value);
+              if (!diagnosticsOpen) void refreshDoctor().catch(() => undefined);
+            }}
+          >
+            {topbarStatusContent}
+          </button>
+        ) : (
+          <div className="capture-topbar-status" role="status">
+            {topbarStatusContent}
+          </div>
+        )}
       </header>
 
-      {diagnosticsOpen && !activeCapture && doctor && (
-        <div className="capture-diagnostics-popover">
+      {diagnosticsOpen && diagnosticsAvailable && doctor && (
+        <div
+          id="capture-diagnostics-panel"
+          className="capture-diagnostics-popover"
+          role="dialog"
+          aria-label="Diagnóstico do ambiente"
+        >
           <DoctorPanel
             result={doctor}
             busy={busy}
@@ -3016,6 +3049,7 @@ function DoctorPanel({
       className="capture-secondary-panel"
       title="Diagnóstico do ambiente"
       subtitle={`Status ${result.status === "ready" ? "Pronto" : result.status === "degraded" ? "Degradado" : "Bloqueado"} · ${result.compatibility.environment}`}
+      action={<Badge tone="warning">Voidr Only</Badge>}
     >
       <div className="doctor-list">
         <div>

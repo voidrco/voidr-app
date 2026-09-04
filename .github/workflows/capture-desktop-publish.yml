@@ -1,0 +1,196 @@
+name: Publish Capture to Platform
+
+on:
+  push:
+    paths:
+      - 'desktop/**'
+      - 'packages/capture-*/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.capture.json'
+      - '.github/workflows/capture-desktop-publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-platform-production
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    runs-on: macos-14
+    outputs:
+      apple_signed: ${{ steps.signing.outputs.apple_signed }}
+    env:
+      VITE_VOIDR_CAPTURE_CHANNEL: production
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Select Apple signing mode
+        id: signing
+        shell: bash
+        env:
+          ALLOW_INTERNAL_RELEASE: ${{ vars.CAPTURE_ALLOW_UNNOTARIZED_INTERNAL_RELEASE }}
+        run: |
+          set -euo pipefail
+          required=(APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD)
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("${name}")
+          done
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo 'apple_signed=true' >> "${GITHUB_OUTPUT}"
+            echo 'VOIDR_PUBLIC_RELEASE=1' >> "${GITHUB_ENV}"
+          elif [[ "${ALLOW_INTERNAL_RELEASE:-}" == 'true' ]]; then
+            echo "::warning::Publishing an internal macOS build without Apple notarization; missing ${missing[*]}."
+            echo 'apple_signed=false' >> "${GITHUB_OUTPUT}"
+          else
+            echo "Apple release credentials are incomplete: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Prepare signing and notarization keychain
+        if: steps.signing.outputs.apple_signed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate_path="${RUNNER_TEMP}/voidr-capture-certificate.p12"
+          keychain_path="${RUNNER_TEMP}/voidr-capture-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          notary_profile="voidr-capture-ci"
+          echo "::add-mask::${keychain_password}"
+          printf '%s' "${MACOS_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}"
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" -P "${MACOS_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain_path}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${keychain_password}" "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}"
+          signing_identity="$(security find-identity -v -p codesigning "${keychain_path}" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)"
+          test -n "${signing_identity}"
+          xcrun notarytool store-credentials "${notary_profile}" --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" --password "${APPLE_APP_SPECIFIC_PASSWORD}" --keychain "${keychain_path}"
+          echo "APPLE_CODESIGN_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
+          echo "APPLE_NOTARY_KEYCHAIN_PROFILE=${notary_profile}" >> "${GITHUB_ENV}"
+          echo "APPLE_NOTARY_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
+
+      - run: npm ci
+      - run: npm run capture:typecheck
+      - run: npm run test:capture
+      - run: npm run make --workspace @voidr/capture-desktop -- --arch=arm64
+
+      - name: Verify macOS artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find desktop/out -type d -name 'Voidr Capture.app' -print -quit)"
+          dmg_path="$(find desktop/out/make -type f -name '*.dmg' -print -quit)"
+          test -n "${app_path}"
+          test -n "${dmg_path}"
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+          codesign --verify --strict --verbose=2 "${dmg_path}"
+          if [[ '${{ steps.signing.outputs.apple_signed }}' == 'true' ]]; then
+            spctl --assess --type execute --verbose=4 "${app_path}"
+            xcrun stapler validate "${app_path}"
+            xcrun stapler validate "${dmg_path}"
+          fi
+
+      - run: node desktop/scripts/prepare-release.mjs --platform=mac --arch=arm64 --channel=production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capture-release-macos-arm64
+          path: desktop/out/release/capture/**
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-x64:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    runs-on: windows-latest
+    env:
+      VITE_VOIDR_CAPTURE_CHANNEL: production
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run capture:typecheck
+      - run: npm run test:capture
+      - run: npm run make --workspace @voidr/capture-desktop -- --arch=x64
+      - run: node desktop/scripts/prepare-release.mjs --platform=windows --arch=x64 --channel=production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capture-release-windows-x64
+          path: desktop/out/release/capture/**
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [macos-arm64, windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: capture-release-*
+          path: release-parts
+      - name: Assemble and verify release
+        env:
+          MINIMUM_SUPPORTED_VERSION: ${{ vars.CAPTURE_MINIMUM_SUPPORTED_VERSION || '0.1.15' }}
+        run: node desktop/scripts/assemble-release.mjs --input=release-parts --output=release --minimum-supported-version=${MINIMUM_SUPPORTED_VERSION} --apple-signed=${{ needs.macos-arm64.outputs.apple_signed }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CAPTURE_RELEASE_CREDENTIALS }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Validate version transition
+        env:
+          BUCKET: ${{ vars.CAPTURE_RELEASE_BUCKET || 'voidr_private_sa' }}
+        run: |
+          set -euo pipefail
+          gcloud storage cp "gs://${BUCKET}/capture/latest.json" "${RUNNER_TEMP}/current.json"
+          node desktop/scripts/validate-release-transition.mjs --current="${RUNNER_TEMP}/current.json" --next=release/capture/latest.json
+
+      - name: Publish installers and manifest
+        env:
+          BUCKET: ${{ vars.CAPTURE_RELEASE_BUCKET || 'voidr_private_sa' }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' release/capture/latest.json)"
+          previous="$(jq -r '.version' "${RUNNER_TEMP}/current.json")"
+          gsutil -h 'Content-Type:application/json' cp "${RUNNER_TEMP}/current.json" "gs://${BUCKET}/capture/history/${previous}-${GITHUB_RUN_ID}.json"
+          while IFS=$'\t' read -r filename key size sha; do
+            source="release/capture/${version}/${filename}"
+            test "$(stat -c '%s' "${source}")" = "${size}"
+            test "$(sha256sum "${source}" | cut -d' ' -f1)" = "${sha}"
+            gsutil -h "Content-Disposition:attachment; filename=${filename}" -h "x-goog-meta-sha256:${sha}" cp "${source}" "gs://${BUCKET}/${key}"
+            test "$(gcloud storage objects describe "gs://${BUCKET}/${key}" --format='value(size)')" = "${size}"
+          done < <(jq -r '.builds[] | [.filename, .key, (.sizeBytes|tostring), .sha256] | @tsv' release/capture/latest.json)
+          gsutil -h 'Content-Type:application/json' cp release/capture/latest.json "gs://${BUCKET}/capture/latest.json"
+
+      - name: Verify Platform release contract
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' release/capture/latest.json)"
+          response="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://api.voidr.co/v1/capture/compatibility?appVersion=${version}&hostProtocol=CAPTURE-HOST%2F1")"
+          test "$(jq -r '.data.latestVersion' <<<"${response}")" = "${version}"
+          test "$(jq -r '.data.compatible' <<<"${response}")" = 'true'

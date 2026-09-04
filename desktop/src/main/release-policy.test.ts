@@ -6,6 +6,10 @@ const workflow = readFileSync(
   fileURLToPath(new URL('../../../.github/workflows/capture-desktop-release.yml', import.meta.url)),
   'utf8',
 );
+const publishWorkflow = readFileSync(
+  fileURLToPath(new URL('../../../.github/workflows/capture-desktop-publish.yml', import.meta.url)),
+  'utf8',
+);
 const publisher = readFileSync(
   fileURLToPath(new URL('../../scripts/publish-release.mjs', import.meta.url)),
   'utf8',
@@ -32,5 +36,16 @@ describe('Capture macOS release policy', () => {
     expect(publisher).toContain("'/usr/sbin/spctl'");
     expect(publisher).toContain("'/usr/bin/xcrun'");
     expect(publisher).toContain("['stapler', 'validate', dmg.source]");
+  });
+
+  it('publishes a complete release after a merge into the production branch', () => {
+    expect(publishWorkflow).toContain("github.ref_name == github.event.repository.default_branch");
+    expect(publishWorkflow).toContain('needs: [macos-arm64, windows-x64]');
+    expect(publishWorkflow).toContain('assemble-release.mjs');
+    expect(publishWorkflow).toContain('validate-release-transition.mjs');
+    expect(publishWorkflow).toContain('gs://${BUCKET}/capture/latest.json');
+    expect(publishWorkflow.indexOf('cp "${source}"')).toBeLessThan(
+      publishWorkflow.lastIndexOf('cp release/capture/latest.json'),
+    );
   });
 });
