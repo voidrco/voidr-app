@@ -179,15 +179,37 @@ jobs:
           set -euo pipefail
           version="$(jq -r '.version' release/capture/latest.json)"
           previous="$(jq -r '.version' "${RUNNER_TEMP}/current.json")"
-          gsutil -h 'Content-Type:application/json' cp "${RUNNER_TEMP}/current.json" "gs://${BUCKET}/capture/history/${previous}-${GITHUB_RUN_ID}.json"
+          access_token="$(gcloud auth print-access-token)"
+          upload_object() {
+            local source="$1"
+            local key="$2"
+            local content_type="$3"
+            shift 3
+            curl --fail --silent --show-error --retry 5 --retry-all-errors \
+              --request PUT \
+              --header "Authorization: Bearer ${access_token}" \
+              --header "Content-Type: ${content_type}" \
+              "$@" \
+              --upload-file "${source}" \
+              "https://storage.googleapis.com/${BUCKET}/${key}"
+          }
+          upload_object \
+            "${RUNNER_TEMP}/current.json" \
+            "capture/history/${previous}-${GITHUB_RUN_ID}.json" \
+            'application/json'
           while IFS=$'\t' read -r filename key size sha; do
             source="release/capture/${version}/${filename}"
             test "$(stat -c '%s' "${source}")" = "${size}"
             test "$(sha256sum "${source}" | cut -d' ' -f1)" = "${sha}"
-            gsutil -h "Content-Disposition:attachment; filename=${filename}" -h "x-goog-meta-sha256:${sha}" cp "${source}" "gs://${BUCKET}/${key}"
+            upload_object \
+              "${source}" \
+              "${key}" \
+              'application/octet-stream' \
+              --header "Content-Disposition: attachment; filename=\"${filename}\"" \
+              --header "x-goog-meta-sha256: ${sha}"
             test "$(gcloud storage objects describe "gs://${BUCKET}/${key}" --format='value(size)')" = "${size}"
           done < <(jq -r '.builds[] | [.filename, .key, (.sizeBytes|tostring), .sha256] | @tsv' release/capture/latest.json)
-          gsutil -h 'Content-Type:application/json' cp release/capture/latest.json "gs://${BUCKET}/capture/latest.json"
+          upload_object release/capture/latest.json capture/latest.json 'application/json'
 
       - name: Verify Platform release contract
         run: |
