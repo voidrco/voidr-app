@@ -55,4 +55,13 @@ describe('Capture macOS release policy', () => {
     );
     expect(publishWorkflow.match(/VITE_VOIDR_CAPTURE_CHANNEL: production/g)).toHaveLength(2);
   });
+
+  it('accepts an unsigned DMG only for the explicit internal release mode', () => {
+    expect(publishWorkflow).toMatch(
+      /if \[\[ '\$\{\{ steps\.signing\.outputs\.apple_signed \}\}' == 'true' \]\]; then\r?\n\s+codesign --verify --strict --verbose=2 "\$\{dmg_path\}"/,
+    );
+    expect(publishWorkflow.indexOf('codesign --verify --deep --strict --verbose=2 "${app_path}"')).toBeLessThan(
+      publishWorkflow.indexOf("if [[ '${{ steps.signing.outputs.apple_signed }}' == 'true' ]]")
+    );
+  });
 });

@@ -102,8 +102,8 @@ jobs:
           test -n "${app_path}"
           test -n "${dmg_path}"
           codesign --verify --deep --strict --verbose=2 "${app_path}"
-          codesign --verify --strict --verbose=2 "${dmg_path}"
           if [[ '${{ steps.signing.outputs.apple_signed }}' == 'true' ]]; then
+            codesign --verify --strict --verbose=2 "${dmg_path}"
             spctl --assess --type execute --verbose=4 "${app_path}"
             xcrun stapler validate "${app_path}"
             xcrun stapler validate "${dmg_path}"
