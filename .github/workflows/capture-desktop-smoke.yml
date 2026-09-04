@@ -9,6 +9,7 @@ on:
       - 'package-lock.json'
       - 'tsconfig.capture.json'
       - '.github/workflows/capture-desktop-smoke.yml'
+      - '.github/workflows/capture-desktop-publish.yml'
   workflow_dispatch:
 
 jobs:
