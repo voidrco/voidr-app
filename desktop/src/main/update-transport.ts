@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { mkdtemp, open, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { autoUpdater } from 'electron';
@@ -12,6 +12,7 @@ const MAX_UPDATE_BYTES = 1_500_000_000;
 export class MacUpdateTransport {
   private directory?: string;
   async download(release: UpdateRelease, progress: (received: number, total: number | undefined, speed: number) => void): Promise<string> {
+    if (!release.url) throw new Error('Missing update URL');
     const url = new URL(release.url);
     if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid update URL');
     this.directory = await mkdtemp(path.join(tmpdir(), 'voidr-update-'));
@@ -23,6 +24,7 @@ export class MacUpdateTransport {
     if (total && total > MAX_UPDATE_BYTES) throw new Error('Update too large');
     const output = await open(file, 'wx', 0o600);
     const reader = response.body.getReader();
+    const hash = createHash('sha256');
     let received = 0;
     let lastProgress = 0;
     const started = Date.now();
@@ -31,6 +33,7 @@ export class MacUpdateTransport {
         const { done, value } = await reader.read();
         if (done) break;
         received += value.byteLength;
+        hash.update(value);
         if (received > MAX_UPDATE_BYTES || (total && received > total)) throw new Error('Invalid update size');
         await output.writeFile(value);
         if (Date.now() - lastProgress >= 250) {
@@ -39,6 +42,7 @@ export class MacUpdateTransport {
         }
       }
       if (!received || (total && total !== received)) throw new Error('Incomplete update');
+      if (release.sha256 && hash.digest('hex') !== release.sha256) throw new Error('Update hash mismatch');
       await output.sync();
       progress(received, total ?? received, received * 1_000 / Math.max(1, Date.now() - started));
       return file;

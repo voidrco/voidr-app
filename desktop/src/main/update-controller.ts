@@ -3,7 +3,9 @@ import type { UpdateState } from '../shared/update';
 export interface UpdateRelease {
   version: string;
   notes?: string;
-  url: string;
+  url?: string;
+  automatic?: boolean;
+  sha256?: string;
   sizeBytes?: number;
 }
 export interface UpdateDependencies {
@@ -18,6 +20,7 @@ export interface UpdateDependencies {
   preserveLaunch: () => void;
   install: () => void;
   publish: (state: UpdateState) => void;
+  beforeStartupRestart?: () => Promise<void>;
 }
 
 // Release channels publish stable versions. Fail closed on malformed/prerelease
@@ -37,6 +40,7 @@ export function isNewerRelease(candidate: string, current: string): boolean {
 export class CaptureUpdater {
   state: UpdateState;
   private flight?: Promise<UpdateState>;
+  private openFlight?: Promise<UpdateState>;
   constructor(private readonly deps: UpdateDependencies) {
     this.state = { phase: deps.enabled ? 'idle' : 'disabled', currentVersion: deps.currentVersion };
   }
@@ -58,7 +62,7 @@ export class CaptureUpdater {
         this.set({ phase: 'sign-in' });
       } else if (!release || !isNewerRelease(release.version, this.state.currentVersion)) {
         this.set({ phase: 'current' });
-      } else if (!this.deps.automatic) {
+      } else if (!this.deps.automatic || release.automatic === false) {
         this.set({ phase: 'manual', version: release.version, notes: release.notes });
       } else {
         this.set({ phase: 'downloading', version: release.version, notes: release.notes, transferred: 0, total: release.sizeBytes });
@@ -79,6 +83,25 @@ export class CaptureUpdater {
       await this.deps.cleanup().catch(() => undefined);
     }
     return this.state;
+  }
+  /** Each process/window opening checks; active captures are never interrupted. */
+  open(): Promise<UpdateState> {
+    if (this.openFlight) return this.openFlight;
+    this.openFlight = (async () => {
+      const idle = this.deps.canRestart();
+      if (idle && this.deps.enabled) this.set({ startup: true });
+      try {
+        await this.check(false);
+        if (idle && this.state.phase === 'ready' && this.deps.canRestart()) {
+          await this.deps.beforeStartupRestart?.();
+          return this.restart();
+        }
+        return this.state;
+      } finally {
+        if (this.state.phase !== 'installing') this.set({ startup: false });
+      }
+    })().finally(() => { this.openFlight = undefined; });
+    return this.openFlight;
   }
   restart(): UpdateState {
     if (this.state.phase !== 'ready') return this.state;

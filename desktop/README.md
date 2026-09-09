@@ -126,11 +126,15 @@ O threat model e os gates de release ficam em [`SECURITY.md`](./SECURITY.md).
 
 ## Atualizações do desktop (0.1.18)
 
-O macOS consulta o catálogo privado do canal gravado no build, 15 segundos após abrir,
-ao autenticar um workspace/convite e a cada quatro horas. Sem uma sessão válida, a consulta
-em segundo plano aguarda a conexão; não abre login sozinha. “Verificar agora” permite
-reautenticar a conta do convite/workspace. O catálogo usa as rotas existentes de clientes
-ou participantes; nenhum endpoint público novo é necessário.
+O Capture consulta `GET /capture/updates` imediatamente em toda abertura e reativação, antes
+de preparar o teste. Essa consulta não depende de login. Se o Service ainda estiver na versão
+anterior, usa `/capture/compatibility` para informar a versão disponível, sem tentar instalar
+um artefato não validado. Também verifica a cada quatro horas enquanto permanece aberto.
+
+O bootstrap só oferece instalação automática de ZIP macOS quando o manifesto de publicação
+traz `appleSigned: true`, SHA-256, tamanho e arquitetura compatíveis. Artefatos internos/ad-hoc
+continuam restritos ao download autenticado existente. O bucket permanece privado; o Service
+emite um link de cinco minutos somente para o ZIP aprovado. Nenhum dado de workspace é exposto.
 
 Uma versão superior e compatível com a arquitetura é baixada automaticamente. A interface
 informa bytes, percentual, velocidade e estimativa de tempo, depois verificação da assinatura,
@@ -139,6 +143,7 @@ Squirrel.Mac em uma porta exclusiva de loopback com caminho aleatório. Tokens e
 não atravessam o preload. O updater nativo verifica a assinatura do aplicativo; não basta um
 HTTP 200. O temporário é removido após a verificação ou falha.
 
+Na abertura, uma atualização pronta é instalada automaticamente antes do teste. Durante o uso,
 “Reiniciar e atualizar” só funciona sem captura/preparação ou evidências pendentes. O convite
 válido ainda não consumido é salvo sem segredos antes do reinício e recuperado uma única vez,
 com validade de 24 horas. Uma captura já concluída não é reaberta. Também preservamos o convite
@@ -155,7 +160,10 @@ As versões anteriores não possuem updater: precisam receber uma primeira insta
 DMG **assinado e notarizado** da 0.1.18. Depois, publicar um ZIP macOS assinado/notarizado da mesma
 identidade de aplicativo, arquitetura e canal, com versão superior, habilita o fluxo automático.
 O workflow existente já produz DMG, ZIP e manifesto. Promover o manifesto somente após os arquivos.
-Esta alteração de código não publica nem substitui o aplicativo instalado.
+O workflow de publicação promove a versão após o merge na branch padrão. Sem as credenciais
+Apple, o modo interno existente pode publicar o instalador e a verificação automática de versão,
+mas não ativa a instalação nativa automática. Não marque `appleSigned` manualmente: esse campo
+provém da verificação de assinatura/notarização no CI.
 
 O ensaio final de distribuição deve instalar uma versão assinada com updater, publicar uma versão
 assinada superior no canal de staging e verificar download, validação nativa, reinício, versão nova

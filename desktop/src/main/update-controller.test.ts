@@ -84,3 +84,48 @@ describe('Capture automatic updates', () => {
     expect(isNewerRelease('0.1.99', '1.0.0')).toBe(false);
   });
 });
+
+describe('every-opening updates', () => {
+  it('checks on every opening when current, including subsequent activations', async () => {
+    const { updater, deps } = fixture({ release: vi.fn(async () => null) });
+    await updater.open();
+    await updater.open();
+    expect(deps.release).toHaveBeenCalledTimes(2);
+    expect(deps.release).toHaveBeenCalledWith(false);
+    expect(updater.state.startup).toBe(false);
+  });
+  it('automatically installs a verified update before releasing the startup gate', async () => {
+    const { updater, deps } = fixture();
+    const opening = updater.open();
+    expect(updater.open()).toBe(opening);
+    await opening;
+    expect(updater.state).toMatchObject({ phase: 'installing', startup: true });
+    expect(deps.install).toHaveBeenCalledOnce();
+    expect(deps.preserveLaunch).toHaveBeenCalledOnce();
+  });
+  it('does not automatically restart a capture already in progress on activation', async () => {
+    const { updater, deps } = fixture({ canRestart: () => false });
+    await updater.open();
+    expect(updater.state).toMatchObject({ phase: 'ready', startup: false });
+    expect(deps.install).not.toHaveBeenCalled();
+  });
+  it('rechecks busy state immediately before restart', async () => {
+    let busy = false;
+    const { updater, deps } = fixture({ canRestart: () => !busy, beforeStartupRestart: async () => { busy = true; } });
+    await updater.open();
+    expect(updater.state.phase).toBe('ready');
+    expect(deps.install).not.toHaveBeenCalled();
+  });
+  it('releases the startup gate on network failure so the app remains usable', async () => {
+    const { updater } = fixture({ release: async () => { throw new Error('offline'); } });
+    await updater.open();
+    expect(updater.state).toMatchObject({ phase: 'error', startup: false });
+  });
+  it('never auto-installs an unsigned release', async () => {
+    const { updater, deps } = fixture({ release: async () => ({ version: '0.1.18', automatic: false }) });
+    await updater.open();
+    expect(updater.state.phase).toBe('manual');
+    expect(deps.download).not.toHaveBeenCalled();
+    expect(deps.install).not.toHaveBeenCalled();
+  });
+});

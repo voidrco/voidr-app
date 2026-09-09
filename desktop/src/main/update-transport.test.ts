@@ -14,6 +14,13 @@ afterEach(async () => {
   await transport?.cleanup();
 });
 describe('native update transport', () => {
+  it('rejects bytes that do not match the release checksum', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('abc')));
+    transport = new MacUpdateTransport();
+    await expect(transport.download({ version: '0.1.18', url: 'https://storage.example/app.zip', sha256: '0'.repeat(64) }, vi.fn())).rejects.toThrow('hash mismatch');
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
   it('downloads bytes privately and reports measured progress', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('abc', { headers: { 'content-length': '3' } })));
     transport = new MacUpdateTransport();

@@ -1,31 +1,35 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchUpdateRelease, releaseServiceUrl } from './update-release';
-const input = { serviceUrl: 'https://api.voidr.co/v1', token: 'private-token', participant: false, currentVersion: '0.1.17', platform: 'darwin' as const, arch: 'arm64' };
-const catalog = { version: '0.1.18', builds: [{ platform: 'mac', arch: 'arm64', format: 'zip', sizeBytes: 100 }] };
+import { fetchStartupUpdate, releaseServiceUrl } from './update-release';
+const input = { serviceUrl: 'https://api.voidr.co/v1', currentVersion: '0.1.17', platform: 'darwin' as const, arch: 'arm64' };
+const update = { version: '0.1.18', available: true, automatic: true, url: 'https://storage.example/app.zip', sha256: 'a'.repeat(64), sizeBytes: 100 };
 const response = (data: unknown) => new Response(JSON.stringify({ success: true, data }));
 afterEach(() => vi.unstubAllGlobals());
-describe('authenticated update catalog', () => {
-  it('uses the exact architecture and ZIP without exposing the token to downloads', async () => {
-    const request = vi.fn().mockResolvedValueOnce(response(catalog)).mockResolvedValueOnce(response({ version: '0.1.18', url: 'https://storage.googleapis.com/private/update.zip?signature=abc' }));
+describe('startup update feed', () => {
+  it('checks without login and pins the device architecture', async () => {
+    const request = vi.fn().mockResolvedValue(response(update));
     vi.stubGlobal('fetch', request);
-    expect(await fetchUpdateRelease(input)).toMatchObject({ version: '0.1.18', sizeBytes: 100 });
-    expect(request.mock.calls[1]![0]).toBe('https://api.voidr.co/v1/capture/download?platform=mac&arch=arm64&format=zip');
-    expect(request.mock.calls[0]![1]).toMatchObject({ redirect: 'error', headers: { Authorization: 'Bearer private-token' } });
+    expect(await fetchStartupUpdate(input)).toMatchObject({ version: '0.1.18', automatic: true, sizeBytes: 100, sha256: 'a'.repeat(64) });
+    expect(request.mock.calls[0]![0]).toBe('https://api.voidr.co/v1/capture/updates?appVersion=0.1.17&hostProtocol=CAPTURE-HOST%2F1&platform=mac&arch=arm64');
+    expect(request.mock.calls[0]![1]).toMatchObject({ redirect: 'error', cache: 'no-store' });
+    expect(request.mock.calls[0]![1]).not.toHaveProperty('headers');
   });
-  it('uses participant catalog only for a participant session', async () => {
-    const request = vi.fn().mockResolvedValue(response({ ...catalog, version: '0.1.17' }));
+  it('requires an explicit signed-release opt-in', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ...update, automatic: false })));
+    expect(await fetchStartupUpdate(input)).toEqual({ version: '0.1.18', automatic: false, notes: undefined });
+  });
+  it.each([{ ...update, sha256: undefined }, { ...update, url: 'http://example.com/app.zip' }, { ...update, sizeBytes: undefined }])('rejects incomplete or insecure automatic downloads', async (data) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(data)));
+    await expect(fetchStartupUpdate(input)).rejects.toThrow();
+  });
+  it('does not reinstall an equal or older version even if the server advertises it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ...update, version: '0.1.16' })));
+    expect(await fetchStartupUpdate(input)).toBeNull();
+  });
+  it('supports rolling service deployments without requesting authentication', async () => {
+    const request = vi.fn().mockResolvedValueOnce(new Response('', { status: 404 })).mockResolvedValueOnce(response({ latestVersion: '0.1.18' }));
     vi.stubGlobal('fetch', request);
-    expect(await fetchUpdateRelease({ ...input, participant: true })).toBeNull();
-    expect(request.mock.calls[0]![0]).toBe('https://api.voidr.co/v1/loop-participant/capture/releases');
-    expect(request).toHaveBeenCalledOnce();
-  });
-  it('rejects a release changed between catalog and signed download', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(catalog)).mockResolvedValueOnce(response({ version: '0.1.19', url: 'https://storage.googleapis.com/app.zip' })));
-    await expect(fetchUpdateRelease(input)).rejects.toThrow('Release changed');
-  });
-  it('never substitutes another CPU architecture', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(catalog)));
-    await expect(fetchUpdateRelease({ ...input, arch: 'x64' })).rejects.toThrow('No compatible');
+    expect(await fetchStartupUpdate(input)).toEqual({ version: '0.1.18', automatic: false });
+    expect(request.mock.calls[1]![0]).toContain('/capture/compatibility?');
   });
   it('pins update channels independently of invitations and renderer settings', () => {
     expect(releaseServiceUrl('production')).toBe('https://api.voidr.co/v1');

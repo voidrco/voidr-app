@@ -400,3 +400,5 @@ html[data-platform='darwin'] .capture-brand-slot .vdr-brand { margin-left: 96px;
 .capture-launch-recovery strong { font-size: 14px; color: var(--color-warning-light); }
 .capture-launch-recovery p { margin: 7px 0 12px; color: var(--color-warning-light); font-size: 12px; line-height: 1.6; }
 .capture-launch-recovery button { font: inherit; font-size: 12px; padding: 7px 11px; border-radius: 6px; color: var(--color-warning-light); background: var(--color-warning-surface); border: 1px solid var(--color-warning-border); margin-right: 8px; cursor: pointer; }
+
+.capture-topbar-tools { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }

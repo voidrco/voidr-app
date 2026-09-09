@@ -41,7 +41,7 @@ export function UpdateCenter({ blocked }: { blocked: boolean }) {
   const percent = state.total ? Math.min(100, Math.floor((state.transferred ?? 0) / state.total * 100)) : undefined;
   const remaining = state.total && state.bytesPerSecond ? Math.ceil((state.total - (state.transferred ?? 0)) / state.bytesPerSecond) : undefined;
   const detail: Record<UpdateState['phase'], string> = {
-    idle: 'O Capture procura novas versões automaticamente ao conectar sua conta.',
+    idle: 'O Capture verifica novas versões toda vez que é aberto.',
     'sign-in': 'Conecte seu workspace ou abra um convite para consultar as atualizações da sua conta.',
     checking: 'Consultando a versão disponível para este dispositivo.',
     current: 'Você está usando a versão mais recente disponível para este dispositivo.',
@@ -55,15 +55,15 @@ export function UpdateCenter({ blocked }: { blocked: boolean }) {
   };
   return <div className="capture-updates" ref={root}>
     <button type="button" className={`capture-update-trigger is-${state.phase}`} onClick={() => setOpen(!open)}
-      disabled={blocked} aria-expanded={open && !blocked} aria-controls="capture-update-panel"
+      disabled={blocked && !state.startup} aria-expanded={(open || Boolean(state.startup)) && (!blocked || Boolean(state.startup))} aria-controls="capture-update-panel"
       title={blocked ? `${labels[state.phase]}. Volte à tela de Loops para abrir as atualizações.` : `Voidr Capture ${state.currentVersion}`}>
       {working ? <Loader2 size={13} className="capture-update-spin" /> : state.phase === 'ready' ? <Download size={13} /> : <RefreshCw size={13} />}
       <span>{state.phase === 'idle' || state.phase === 'sign-in' || state.phase === 'disabled' ? `v${state.currentVersion}` : labels[state.phase]}</span>
       {state.phase === 'downloading' && percent !== undefined && <span>{percent}%</span>}
     </button>
-    {open && !blocked && <section id="capture-update-panel" className="capture-update-panel" aria-label="Atualizações do Capture">
+    {(open || state.startup) && (!blocked || state.startup) && <section id="capture-update-panel" className="capture-update-panel" aria-label="Atualizações do Capture">
       <div className="capture-update-heading"><span>VOIDR CAPTURE</span><button type="button" aria-label="Fechar atualizações" onClick={() => setOpen(false)}><X size={16} /></button></div>
-      <div aria-live="polite" aria-atomic="true"><h2>{labels[state.phase]}</h2><p>{state.message ?? detail[state.phase]}</p></div>
+      <div aria-live="polite" aria-atomic="true"><h2>{labels[state.phase]}</h2><p>{state.message ?? (state.startup && working ? 'Atualizando antes de abrir seu teste. O convite será retomado automaticamente.' : detail[state.phase])}</p></div>
       <div className="capture-update-versions"><span>Instalada <strong>{state.currentVersion}</strong></span>{state.version && <span>Nova versão <strong>{state.version}</strong></span>}</div>
       {(state.phase === 'downloading' || state.phase === 'verifying') && <div className="capture-update-download">
         <progress aria-label={state.phase === 'verifying' ? 'Verificando assinatura' : 'Download da atualização'} max={100} value={state.phase === 'downloading' ? percent : undefined} />
