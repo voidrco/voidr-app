@@ -215,6 +215,16 @@ jobs:
         run: |
           set -euo pipefail
           version="$(jq -r '.version' release/capture/latest.json)"
-          response="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://api.voidr.co/v1/capture/compatibility?appVersion=${version}&hostProtocol=CAPTURE-HOST%2F1")"
-          test "$(jq -r '.data.latestVersion' <<<"${response}")" = "${version}"
-          test "$(jq -r '.data.compatible' <<<"${response}")" = 'true'
+          # Service instances cache the manifest. A successful upload can still
+          # be followed by an old, valid HTTP 200 response until that cache expires.
+          for attempt in $(seq 1 12); do
+            response="$(curl --fail --silent --show-error --max-time 10 "https://api.voidr.co/v1/capture/compatibility?appVersion=${version}&hostProtocol=CAPTURE-HOST%2F1")" || response='{}'
+            if jq -e --arg version "${version}" '.success == true and .data.latestVersion == $version and .data.compatible == true' <<<"${response}" >/dev/null; then
+              echo "Platform confirmed Capture ${version}."
+              exit 0
+            fi
+            echo "Waiting for Capture ${version} to propagate (${attempt}/12)."
+            if [[ "${attempt}" -lt 12 ]]; then sleep 10; fi
+          done
+          echo 'Platform did not confirm the published release before the deadline.' >&2
+          exit 1
