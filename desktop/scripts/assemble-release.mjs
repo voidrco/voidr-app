@@ -26,7 +26,7 @@ async function sha256(file) {
 
 function releaseNotes(appleSigned) {
   const product =
-    'Diagnóstico do ambiente acessível pelo status de conexão e restrito a contas Voidr.';
+    'Atualização verificada a cada abertura, recuperação de convites e proteção das capturas em andamento.';
   if (appleSigned) return `${product} macOS assinado e notarizado pela Apple; Windows validado pelo CI.`;
   return `${product} Versão temporária para testes internos: macOS usa assinatura ad-hoc e pode exigir liberação individual em Privacidade e Segurança; Windows validado pelo CI.`;
 }
@@ -90,6 +90,7 @@ export async function assembleRelease({
 
   const manifest = {
     version,
+    appleSigned,
     minimumSupportedVersion,
     publishedAt,
     notes: releaseNotes(appleSigned),

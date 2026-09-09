@@ -13,7 +13,7 @@ button, input, textarea, select { font-size: inherit; }
 button { color: inherit; }
 
 .capture-shell { width: 100%; height: 100%; display: grid; grid-template-rows: 58px minmax(0, 1fr); background: var(--background); }
-.capture-topbar { position: relative; z-index: 20; display: grid; grid-template-columns: 230px minmax(0, 1fr) 230px; align-items: center; gap: 16px; padding: 0 18px; border-bottom: 1px solid var(--border-color); background: var(--background-elevated); -webkit-app-region: drag; }
+.capture-topbar { position: relative; z-index: 20; display: grid; grid-template-columns: 230px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 0 18px; border-bottom: 1px solid var(--border-color); background: var(--background-elevated); -webkit-app-region: drag; }
 .capture-topbar > * { min-width: 0; }
 .capture-topbar button, .capture-topbar input { -webkit-app-region: no-drag; }
 .capture-topbar-context { display: flex; align-items: center; justify-content: center; gap: 8px; overflow: hidden; }
@@ -365,3 +365,40 @@ html[data-platform='darwin'] .capture-brand-slot .vdr-brand { margin-left: 96px;
 @media (prefers-reduced-motion: reduce) {
   .spin { animation-duration: 1.6s; }
 }
+
+/* Update feedback stays in the control chrome; native captures retain their bounds. */
+.capture-updates { position: relative; -webkit-app-region: no-drag; }
+.capture-update-trigger { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 7px; background: var(--background-secondary); padding: 6px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+.capture-update-trigger:disabled { cursor: default; opacity: .8; }
+.capture-update-trigger.is-ready { color: var(--color-success-light); border-color: var(--color-success-border); }
+.capture-update-trigger.is-error { color: var(--color-warning-light); }
+.capture-update-panel { position: absolute; right: 0; top: calc(100% + 14px); width: 368px; z-index: 200; padding: 22px; border: 1px solid var(--border-color); border-radius: 14px; background: var(--background-secondary); box-shadow: 0 20px 70px var(--scrim); color: var(--text-primary); text-align: left; }
+.capture-update-heading { display: flex; align-items: center; justify-content: space-between; color: var(--text-secondary); font: 10px monospace; letter-spacing: .13em; margin-bottom: 15px; }
+.capture-update-heading button { padding: 0; background: none; border: 0; color: var(--text-secondary); cursor: pointer; }
+.capture-update-panel h2 { font-size: 19px; line-height: 1.3; margin: 0 0 8px; letter-spacing: -.025em; }
+.capture-update-panel p { color: var(--text-secondary); font-size: 12px; line-height: 1.65; margin: 0 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.capture-update-versions { display: flex; gap: 24px; border-block: 1px solid var(--border-color); padding: 14px 0; color: var(--text-secondary); font-size: 11px; }
+.capture-update-versions strong { display: block; color: var(--text-primary); margin-top: 4px; font: 12px monospace; }
+.capture-update-download { margin-top: 18px; }
+.capture-update-download progress { display: block; width: 100%; height: 5px; accent-color: var(--color-success-light); border: 0; border-radius: 4px; overflow: hidden; }
+.capture-update-download progress::-webkit-progress-bar { background: var(--color-success-border); }
+.capture-update-download progress::-webkit-progress-value { background: var(--color-success-light); }
+.capture-update-download > div { display: flex; justify-content: space-between; font: 10px monospace; color: var(--text-secondary); margin-top: 10px; }
+.capture-update-download small { display: block; font-size: 11px; color: var(--text-secondary); margin-top: 8px; }
+.capture-update-safe { display: flex; align-items: center; gap: 7px; color: var(--color-success-light); font-size: 11px; margin-top: 16px; }
+.capture-update-notes { margin-top: 16px; font-size: 12px; color: var(--text-secondary); }
+.capture-update-notes summary { cursor: pointer; }
+.capture-update-notes p { margin: 12px 0 0; max-height: 140px; overflow-y: auto; }
+.capture-update-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.capture-update-actions:empty { display: none; }
+.capture-update-actions button { background: var(--background-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 7px; font: inherit; font-size: 11px; padding: 9px 12px; cursor: pointer; }
+.capture-update-actions button.primary { color: var(--background); background: var(--color-success-light); border-color: var(--color-success-light); font-weight: 650; }
+.capture-update-spin { animation: capture-update-rotate 1.2s linear infinite; }
+@keyframes capture-update-rotate { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .capture-update-spin { animation: none; } }
+.capture-launch-recovery { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); z-index: 110; width: min(660px, calc(100vw - 48px)); padding: 18px 22px; border: 1px solid var(--color-warning-border); border-radius: 12px; background: var(--background-elevated); box-shadow: 0 12px 40px var(--scrim); }
+.capture-launch-recovery strong { font-size: 14px; color: var(--color-warning-light); }
+.capture-launch-recovery p { margin: 7px 0 12px; color: var(--color-warning-light); font-size: 12px; line-height: 1.6; }
+.capture-launch-recovery button { font: inherit; font-size: 12px; padding: 7px 11px; border-radius: 6px; color: var(--color-warning-light); background: var(--color-warning-surface); border: 1px solid var(--color-warning-border); margin-right: 8px; cursor: pointer; }
+
+.capture-topbar-tools { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }

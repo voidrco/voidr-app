@@ -31,6 +31,7 @@ export interface SecretLoopLaunch {
 }
 
 export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
+  if (input.length > 4_096) throw new Error("O link excede o tamanho permitido.");
   const url = new URL(input);
   if (
     url.protocol !== "voidr:" ||

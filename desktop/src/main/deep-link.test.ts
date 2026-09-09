@@ -7,6 +7,19 @@ import {
 } from "./deep-link";
 
 describe("desktop Loop bootstrap", () => {
+  const reportedLink = "voidr://capture/loops/lts_1b8c167cfb2247d4863801953fc14d8a/cycles/12de63f9-4d32-4c25-a1a6-530e34e14839?organization=org_XpZs54aP8Oop8qUz&surface=web&deployment=production&v=1&attempt=3fbf4a47-5c5d-4a54-9371-9d68ba60f405";
+  it("accepts the production invitation reported by the customer", () => {
+    expect(parseDesktopCaptureLaunch(reportedLink)).toMatchObject({
+      organizationId: "org_XpZs54aP8Oop8qUz", deployment: "production",
+      loopId: "lts_1b8c167cfb2247d4863801953fc14d8a", cycleId: "12de63f9-4d32-4c25-a1a6-530e34e14839",
+      attemptId: "3fbf4a47-5c5d-4a54-9371-9d68ba60f405",
+    });
+  });
+  it("rejects malformed and duplicated attempt ids", () => {
+    expect(() => parseDesktopCaptureLaunch(reportedLink + "&attempt=3fbf4a47-5c5d-4a54-9371-9d68ba60f405")).toThrow();
+    expect(() => parseDesktopCaptureLaunch(reportedLink.replace("3fbf4a47-5c5d-4a54-9371-9d68ba60f405", "garbage"))).toThrow();
+  });
+
   it("parses a secret-free workspace switch from the Web platform", () => {
     expect(
       parseDesktopWorkspaceLink(

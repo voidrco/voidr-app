@@ -123,3 +123,60 @@ O threat model e os gates de release ficam em [`SECURITY.md`](./SECURITY.md).
   espaçamento do Voidr Design System.
 - A finalização mostra cada etapa e, quando o contexto identifica um harness, informa nominalmente
   a entrega ao agente conectado.
+
+## Atualizações do desktop (0.1.18)
+
+O Capture consulta `GET /capture/updates` imediatamente em toda abertura e reativação, antes
+de preparar o teste. Essa consulta não depende de login. Se o Service ainda estiver na versão
+anterior, usa `/capture/compatibility` para informar a versão disponível, sem tentar instalar
+um artefato não validado. Também verifica a cada quatro horas enquanto permanece aberto.
+
+O bootstrap só oferece instalação automática de ZIP macOS quando o manifesto de publicação
+traz `appleSigned: true`, SHA-256, tamanho e arquitetura compatíveis. Artefatos internos/ad-hoc
+continuam restritos ao download autenticado existente. O bucket permanece privado; o Service
+emite um link de cinco minutos somente para o ZIP aprovado. Nenhum dado de workspace é exposto.
+
+Uma versão superior e compatível com a arquitetura é baixada automaticamente. A interface
+informa bytes, percentual, velocidade e estimativa de tempo, depois verificação da assinatura,
+prontidão e eventual erro com nova tentativa. O arquivo temporário, privado, é servido ao
+Squirrel.Mac em uma porta exclusiva de loopback com caminho aleatório. Tokens e URLs assinadas
+não atravessam o preload. O updater nativo verifica a assinatura do aplicativo; não basta um
+HTTP 200. O temporário é removido após a verificação ou falha.
+
+Na abertura, uma atualização pronta é instalada automaticamente antes do teste. Durante o uso,
+“Reiniciar e atualizar” só funciona sem captura/preparação ou evidências pendentes. O convite
+válido ainda não consumido é salvo sem segredos antes do reinício e recuperado uma única vez,
+com validade de 24 horas. Uma captura já concluída não é reaberta. Também preservamos o convite
+quando o usuário fecha normalmente um app com atualização pronta, pois o updater nativo instala
+na próxima abertura. Falhas de abertura têm aviso persistente; falhas de ambiente agora entram
+no tratamento de erro e permitem repetir a abertura.
+
+Windows e Linux mostram a nova versão e encaminham aos instaladores na plataforma; a instalação
+automática desta implementação é macOS. Builds de desenvolvimento e preview não se atualizam.
+
+### Publicação e primeira instalação
+
+As versões anteriores não possuem updater: precisam receber uma primeira instalação manual do
+DMG **assinado e notarizado** da 0.1.18. Depois, publicar um ZIP macOS assinado/notarizado da mesma
+identidade de aplicativo, arquitetura e canal, com versão superior, habilita o fluxo automático.
+O workflow existente já produz DMG, ZIP e manifesto. Promover o manifesto somente após os arquivos.
+O workflow de publicação promove a versão após o merge na branch padrão. Sem as credenciais
+Apple, o modo interno existente pode publicar o instalador e a verificação automática de versão,
+mas não ativa a instalação nativa automática. Não marque `appleSigned` manualmente: esse campo
+provém da verificação de assinatura/notarização no CI.
+
+O ensaio final de distribuição deve instalar uma versão assinada com updater, publicar uma versão
+assinada superior no canal de staging e verificar download, validação nativa, reinício, versão nova
+e retomada de um convite. Os testes automatizados simulam os eventos nativos e verificam o servidor
+local e os bloqueios; não substituem esse ensaio com dois aplicativos notarizados.
+
+### Associação de links no macOS
+
+Backups antigos com o mesmo bundle ID podem assumir `voidr://`. No incidente de setembro de 2026,
+o macOS apontava para `~/Applications/Voidr Capture.previous.app` apesar de a 0.1.17 estar instalada
+em `/Applications`. A correção local removeu apenas os registros de protocolo das cópias antigas,
+preservando seus arquivos, e registrou `/Applications/Voidr Capture.app` novamente.
+
+Novos builds macOS só registram o protocolo quando estão em Applications e o bundle tem o nome
+canônico `Voidr Capture.app`. Não abrir backups antigos depois de restaurar a associação: versões
+antigas ainda podem executar seu próprio registro de protocolo.
