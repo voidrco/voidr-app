@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { z } from 'zod';
+import { updateStateSchema, type UpdateState } from '../shared/update';
 import type {
   AndroidDevice,
   CaptureStatus,
@@ -73,7 +74,30 @@ export interface CaptureLaunchAcceptance {
 }
 
 const api = {
+  updates: {
+    status: (): Promise<UpdateState> => ipcRenderer.invoke('updates:status').then((value) => updateStateSchema.parse(value)),
+    check: (): Promise<UpdateState> => ipcRenderer.invoke('updates:check').then((value) => updateStateSchema.parse(value)),
+    restart: (): Promise<UpdateState> => ipcRenderer.invoke('updates:restart').then((value) => updateStateSchema.parse(value)),
+    openDownload: (): Promise<void> => ipcRenderer.invoke('updates:open-download'),
+    onChange: (callback: (state: UpdateState) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = updateStateSchema.safeParse(value);
+        if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on('updates:changed', listener);
+      return () => ipcRenderer.removeListener('updates:changed', listener);
+    },
+  },
   capture: {
+    protocolError: (): Promise<string | null> => ipcRenderer.invoke('capture:protocol-error').then((value) => z.string().max(500).nullable().parse(value)),
+    onProtocolError: (callback: (message: string | null) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = z.string().max(500).nullable().safeParse(value);
+        if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on('capture:protocol-error', listener);
+      return () => ipcRenderer.removeListener('capture:protocol-error', listener);
+    },
     status: (): Promise<CaptureStatus> => invokeStatus('capture:status'),
     annotationStatus: (): Promise<{ pendingCount: number }> =>
       ipcRenderer.invoke('capture:annotation-status').then((value) => ({

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, globalShortcut, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
+import { app, autoUpdater, BrowserWindow, globalShortcut, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
 import { z } from 'zod';
 import { buildLoopCodeHandoffUrl, loopCodeHandoffInputSchema } from './code-handoff';
 import {
@@ -23,6 +23,10 @@ import { LoopParticipantAuthSession } from './loop-participant-auth';
 import { WebCaptureController } from './web-capture-controller';
 import { parseDesktopProtocolLink } from './deep-link';
 import { AnnotationOutbox } from './annotation-outbox';
+import { CaptureUpdater } from './update-controller';
+import { MacUpdateTransport } from './update-transport';
+import { fetchUpdateRelease, releaseServiceUrl } from './update-release';
+import { PendingLaunchStore } from './pending-launch';
 import {
   connectWorkspaceSession,
   createWorkspaceSession,
@@ -55,6 +59,10 @@ const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
+let protocolError: string | undefined;
+let updater: CaptureUpdater | undefined;
+let pendingLaunchStore: PendingLaunchStore | undefined;
+let updateAuth: { organizationId?: string; participant: boolean } | undefined;
 let pendingWorkspaceLink: DesktopWorkspaceLink | undefined;
 let mainWindowCreation: Promise<void> | undefined;
 let launchAcceptanceFlight: Promise<unknown> | undefined;
@@ -143,6 +151,12 @@ const automationVoiceDraftSchema = z.object({
 
 function protocolUrlFromArgv(argv: readonly string[]): string | undefined {
   return argv.find((value) => value.startsWith('voidr://'));
+}
+
+function publishProtocolError(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('capture:protocol-error', protocolError ?? null);
+  }
 }
 
 function publishPendingLaunch(): void {
@@ -238,6 +252,8 @@ function scheduleMainWindow(): void {
 function receiveProtocolUrl(value: string): void {
   try {
     const link = parseDesktopProtocolLink(value);
+    protocolError = undefined;
+    publishProtocolError();
     if (link.kind === 'capture') {
       pendingLaunch = link.value;
       publishPendingLaunch();
@@ -247,7 +263,10 @@ function receiveProtocolUrl(value: string): void {
     }
     scheduleMainWindow();
   } catch {
-    // Untrusted protocol input fails closed and never reaches a renderer.
+    // Report a fixed explanation, never the untrusted URI or its contents.
+    protocolError = 'Este link não é compatível com esta versão do Capture. Verifique as atualizações ou gere um novo convite na plataforma.';
+    publishProtocolError();
+    scheduleMainWindow();
   }
 }
 
@@ -280,6 +299,27 @@ function assertControlSender(event: Electron.IpcMainInvokeEvent): void {
 }
 
 function registerIpc(): void {
+  ipcMain.handle('capture:protocol-error', (event) => {
+    assertControlSender(event);
+    return protocolError ?? null;
+  });
+  ipcMain.handle('updates:status', (event) => {
+    assertControlSender(event);
+    return updater!.state;
+  });
+  ipcMain.handle('updates:check', (event) => {
+    assertControlSender(event);
+    return updater!.check(true);
+  });
+  ipcMain.handle('updates:restart', (event) => {
+    assertControlSender(event);
+    return updater!.restart();
+  });
+  ipcMain.handle('updates:open-download', async (event) => {
+    assertControlSender(event);
+    const staging = process.env.VOIDR_CAPTURE_RELEASE_CHANNEL === 'staging';
+    await shell.openExternal(staging ? 'https://staging.voidr.co/loops' : 'https://platform.voidr.co/loops');
+  });
   ipcMain.handle('capture:status', (event) => {
     assertControlSender(event);
     return webCapture?.status;
@@ -326,6 +366,8 @@ function registerIpc(): void {
               ? parsed.launch.organizationId
               : undefined,
           );
+      updateAuth = { participant: parsed.launch.access === 'participant', organizationId: parsed.launch.organizationId };
+      void updater?.check();
       const handoff = await client.resolveDesktopLaunch(
         parsed.launch,
         remoteToken,
@@ -340,8 +382,10 @@ function registerIpc(): void {
         if (status.stage === 'ready') status = await webCapture!.start();
       }
       if (
-        pendingLaunch?.loopId === parsed.launch.loopId &&
-        pendingLaunch.cycleId === parsed.launch.cycleId
+        pendingLaunch?.organizationId === parsed.launch.organizationId &&
+        pendingLaunch.loopId === parsed.launch.loopId &&
+        pendingLaunch.cycleId === parsed.launch.cycleId &&
+        pendingLaunch.attemptId === parsed.launch.attemptId
       ) {
         pendingLaunch = undefined;
       }
@@ -475,6 +519,8 @@ function registerIpc(): void {
     const runtime = localRuntimeConfigSchema.parse(runtimeInput);
     const identity = await connectWorkspaceSession(runtime, loopParticipantAuth);
     workspaceIdentities.set(workspaceIdentityKey(runtime), identity);
+    updateAuth = { participant: false, organizationId: runtime.organizationId };
+    void updater?.check();
     return identity;
   });
   ipcMain.handle('workspace:disconnect', (event, runtimeInput) => {
@@ -672,6 +718,7 @@ async function createWindow(): Promise<void> {
   mainWindow.webContents.on('did-finish-load', () => {
     publishPendingLaunch();
     publishPendingWorkspaceLink();
+    publishProtocolError();
   });
   if (isDevelopment) {
     await mainWindow.loadURL(process.env.VOIDR_CAPTURE_DEV_SERVER_URL!);
@@ -679,6 +726,51 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadURL(`${CONTROL_ORIGIN}/index.html`);
   }
   void webCapture?.recoverPendingAnnotations();
+}
+
+function setupUpdates(): void {
+  pendingLaunchStore = new PendingLaunchStore(path.join(app.getPath('userData'), 'pending-update-launch.json'));
+  const restored = pendingLaunchStore.take();
+  if (!pendingLaunch) pendingLaunch = restored;
+  const serviceUrl = releaseServiceUrl(process.env.VOIDR_CAPTURE_RELEASE_CHANNEL ?? 'production');
+  const transport = new MacUpdateTransport();
+  updater = new CaptureUpdater({
+    currentVersion: app.getVersion(),
+    enabled: app.isPackaged && Boolean(serviceUrl),
+    automatic: process.platform === 'darwin',
+    async release(interactive) {
+      const context = pendingLaunch
+        ? { participant: pendingLaunch.access === 'participant', organizationId: pendingLaunch.organizationId }
+        : updateAuth;
+      if (!context || !serviceUrl) return 'sign-in';
+      const profile = context.participant ? 'participant' : 'organization';
+      const organization = context.participant ? undefined : context.organizationId;
+      let token = loopParticipantAuth.cachedAccessToken(profile, organization);
+      if (!token && interactive) token = await loopParticipantAuth.accessToken(profile, organization);
+      if (!token) return 'sign-in';
+      return fetchUpdateRelease({ serviceUrl, token, participant: context.participant,
+        currentVersion: app.getVersion(), platform: process.platform, arch: process.arch });
+    },
+    download: (release, progress) => transport.download(release, progress),
+    stage: (file, release) => transport.stage(file, release),
+    cleanup: () => transport.cleanup(),
+    canRestart: () => !launchAcceptanceFlight && !shouldKeepCaptureAliveOnClose() &&
+      !['preparing', 'ready'].includes(webCapture?.status.stage ?? '') &&
+      (webCapture?.annotationPendingCount() ?? 0) === 0,
+    preserveLaunch: () => pendingLaunchStore!.save(pendingLaunch),
+    install: () => autoUpdater.quitAndInstall(),
+    publish: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:changed', state);
+    },
+  });
+  // Native errors can arrive after a timed-out verification. Never let an
+  // EventEmitter error crash the capture; the controller already reports it.
+  autoUpdater.on('error', () => {});
+  autoUpdater.on('before-quit-for-update', () => { appIsQuitting = true; });
+  const initial = setTimeout(() => { void updater?.check(); }, 15_000);
+  initial.unref();
+  const periodic = setInterval(() => { void updater?.check(); }, 4 * 60 * 60_000);
+  periodic.unref();
 }
 
 function registerProtocol(): void {
@@ -693,6 +785,9 @@ function registerProtocol(): void {
     }
     return;
   }
+  // Packaged test builds and backup bundles must never steal production links.
+  if (process.platform === 'darwin' &&
+    (!app.isInApplicationsFolder() || path.basename(path.resolve(process.execPath, '../../..')) !== 'Voidr Capture.app')) return;
   app.setAsDefaultProtocolClient('voidr');
 }
 
@@ -716,6 +811,7 @@ if (!lock) {
     registerProtocol();
     registerControlProtocol();
     hardenSession(session.defaultSession);
+    setupUpdates();
     registerIpc();
     await ensureMainWindow();
     app.on('activate', () => {
@@ -723,6 +819,10 @@ if (!lock) {
     });
   });
   app.on('before-quit', () => {
+    // Native staged updates also install on a normal quit.
+    if (updater && ['ready', 'installing'].includes(updater.state.phase)) {
+      try { pendingLaunchStore?.save(pendingLaunch); } catch { /* next launch can use the original invite */ }
+    }
     appIsQuitting = true;
     if (selectionEscapeRegistered) {
       globalShortcut.unregister('Escape');

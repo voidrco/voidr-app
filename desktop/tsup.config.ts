@@ -12,5 +12,8 @@ export default defineConfig({
   sourcemap: false,
   clean: true,
   external: ['electron'],
+  define: {
+    'process.env.VOIDR_CAPTURE_RELEASE_CHANNEL': JSON.stringify(process.env.VITE_VOIDR_CAPTURE_CHANNEL || 'production'),
+  },
   noExternal: ['@voidr/capture-contracts', '@voidr/capture-kernel'],
 });

@@ -1,3 +1,4 @@
+import { UpdateCenter } from "./UpdateCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -230,6 +231,9 @@ function App() {
     cycleId: string;
   }>();
   const [mobileAppOpened, setMobileAppOpened] = useState(false);
+  const [protocolError, setProtocolError] = useState<string | null>(null);
+  const [failedLaunch, setFailedLaunch] = useState<DesktopCaptureLaunch>();
+  const [launchFailure, setLaunchFailure] = useState<string>();
   const [launchResolution, setLaunchResolution] =
     useState<DesktopCaptureResolution>();
   const [finalizationElapsedMs, setFinalizationElapsedMs] = useState(0);
@@ -384,13 +388,10 @@ function App() {
         );
         return;
       }
-      const launchRuntime = runtimeForDeployment(
-        launch.deployment,
-        runtime,
-        launch.organizationId,
-        launch.previewSlug,
-      );
       acceptingLaunch.current = key;
+      setProtocolError(null);
+      setLaunchFailure(undefined);
+      setFailedLaunch(undefined);
       setBusy(true);
       setFeedback({
         tone: "info",
@@ -398,6 +399,12 @@ function App() {
         message: "Confirmando aplicação, ambiente e permissões com a Voidr.",
       });
       try {
+        const launchRuntime = runtimeForDeployment(
+          launch.deployment,
+          runtime,
+          launch.organizationId,
+          launch.previewSlug,
+        );
         const accepted = await window.voidrCapture.capture.acceptLaunch(
           launch,
           launchRuntime,
@@ -439,6 +446,8 @@ function App() {
                 : "Revise o endpoint antes de iniciar a captura.",
         });
       } catch (error) {
+        setFailedLaunch(launch);
+        setLaunchFailure(launchErrorMessage(error));
         setFeedback({
           tone: "error",
           title: "Não foi possível abrir o teste",
@@ -566,6 +575,24 @@ function App() {
       .annotationStatus()
       .then(({ pendingCount }) => setPendingAnnotations(pendingCount))
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let changed = false;
+    const unsubscribe = window.voidrCapture.capture.onProtocolError((message) => {
+      changed = true;
+      setProtocolError(message);
+      if (message) {
+        setFailedLaunch(undefined);
+        setLaunchFailure(undefined);
+        setFeedback(undefined);
+      }
+    });
+    void window.voidrCapture.capture.protocolError().then((message) => {
+      if (alive && !changed) setProtocolError(message);
+    }).catch(() => undefined);
+    return () => { alive = false; unsubscribe(); };
   }, []);
 
   useEffect(() => {
@@ -1669,6 +1696,7 @@ function App() {
           )}
         </div>
         <div className="capture-topbar-status" role="status">
+          <UpdateCenter blocked={activeCapture || busy || pendingAnnotations > 0} />
           {workspaceIdentity && !activeCapture && homeView === "loops" && (
             <span
               className="capture-user-avatar"
@@ -1703,6 +1731,15 @@ function App() {
           {recording && <code>{elapsed(status.elapsedMs)}</code>}
         </div>
       </header>
+
+      {!activeCapture && (protocolError || launchFailure) && (
+        <section className="capture-launch-recovery" role="alert">
+          <strong>Não foi possível abrir o teste</strong>
+          <p>{protocolError ?? launchFailure}</p>
+          {failedLaunch && <button type="button" disabled={busy} onClick={() => void acceptLaunch(failedLaunch)}>Tentar abrir novamente</button>}
+          <button type="button" onClick={() => { setProtocolError(null); setLaunchFailure(undefined); setFailedLaunch(undefined); setFeedback(undefined); }}>Fechar aviso</button>
+        </section>
+      )}
 
       {!activeCapture && (
         <div className="capture-idle-layout">
