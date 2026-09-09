@@ -55,15 +55,15 @@ export function UpdateCenter({ blocked }: { blocked: boolean }) {
   };
   return <div className="capture-updates" ref={root}>
     <button type="button" className={`capture-update-trigger is-${state.phase}`} onClick={() => setOpen(!open)}
-      disabled={blocked && !state.startup} aria-expanded={(open || Boolean(state.startup)) && (!blocked || Boolean(state.startup))} aria-controls="capture-update-panel"
+      disabled={Boolean(state.startup) || blocked} aria-expanded={(open || Boolean(state.startup)) && (!blocked || Boolean(state.startup))} aria-controls="capture-update-panel"
       title={blocked ? `${labels[state.phase]}. Volte à tela de Loops para abrir as atualizações.` : `Voidr Capture ${state.currentVersion}`}>
       {working ? <Loader2 size={13} className="capture-update-spin" /> : state.phase === 'ready' ? <Download size={13} /> : <RefreshCw size={13} />}
       <span>{state.phase === 'idle' || state.phase === 'sign-in' || state.phase === 'disabled' ? `v${state.currentVersion}` : labels[state.phase]}</span>
       {state.phase === 'downloading' && percent !== undefined && <span>{percent}%</span>}
     </button>
     {(open || state.startup) && (!blocked || state.startup) && <section id="capture-update-panel" className="capture-update-panel" aria-label="Atualizações do Capture">
-      <div className="capture-update-heading"><span>VOIDR CAPTURE</span><button type="button" aria-label="Fechar atualizações" onClick={() => setOpen(false)}><X size={16} /></button></div>
-      <div aria-live="polite" aria-atomic="true"><h2>{labels[state.phase]}</h2><p>{state.message ?? (state.startup && working ? 'Atualizando antes de abrir seu teste. O convite será retomado automaticamente.' : detail[state.phase])}</p></div>
+      <div className="capture-update-heading"><span>VOIDR CAPTURE</span>{!state.startup && <button type="button" aria-label="Fechar atualizações" onClick={() => setOpen(false)}><X size={16} /></button>}</div>
+      <div aria-live="polite" aria-atomic="true"><h2>{labels[state.phase]}</h2><p>{state.message ?? (state.startup && state.phase === 'ready' ? 'A atualização foi verificada. O Capture vai reiniciar e retomar seu convite.' : state.startup && working && state.phase !== 'checking' ? 'Atualizando antes de abrir seu teste. O convite será retomado automaticamente.' : detail[state.phase])}</p></div>
       <div className="capture-update-versions"><span>Instalada <strong>{state.currentVersion}</strong></span>{state.version && <span>Nova versão <strong>{state.version}</strong></span>}</div>
       {(state.phase === 'downloading' || state.phase === 'verifying') && <div className="capture-update-download">
         <progress aria-label={state.phase === 'verifying' ? 'Verificando assinatura' : 'Download da atualização'} max={100} value={state.phase === 'downloading' ? percent : undefined} />
@@ -75,7 +75,7 @@ export function UpdateCenter({ blocked }: { blocked: boolean }) {
       {state.notes && <details className="capture-update-notes"><summary>O que mudou nesta versão</summary><p>{state.notes}</p></details>}
       {actionError && <p role="alert">{actionError}</p>}
       <div className="capture-update-actions">
-        {state.phase === 'ready' ? <><button type="button" onClick={() => setOpen(false)}>Mais tarde</button><button type="button" className="primary" onClick={() => void action(() => window.voidrCapture.updates.restart())}>Reiniciar e atualizar</button></> :
+        {state.phase === 'ready' ? !state.startup && <><button type="button" onClick={() => setOpen(false)}>Mais tarde</button><button type="button" className="primary" onClick={() => void action(() => window.voidrCapture.updates.restart())}>Reiniciar e atualizar</button></> :
           state.phase === 'manual' ? <button type="button" className="primary" onClick={() => void action(() => window.voidrCapture.updates.openDownload())}>Abrir downloads</button> :
             !working && state.phase !== 'disabled' && <button type="button" className="primary" onClick={() => void action(() => window.voidrCapture.updates.check())}>{state.phase === 'error' ? 'Tentar novamente' : 'Verificar agora'}</button>}
       </div>
