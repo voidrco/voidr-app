@@ -994,8 +994,12 @@ export class WebCaptureController {
           throw new Error('A aplicação capturada foi fechada durante a navegação.');
         }
         try {
+          const trustedTargetLoad = this.#waitForTrustedTargetLoad(view);
           await withTimeout(
-            view.webContents.loadURL(nextUrl),
+            Promise.race([
+              view.webContents.loadURL(nextUrl).then(() => undefined),
+              trustedTargetLoad,
+            ]),
             TARGET_LOAD_TIMEOUT_MS,
             'A aplicação demorou demais para abrir no Voidr Capture.',
           );
@@ -1203,7 +1207,7 @@ export class WebCaptureController {
         cycleNumber: context.cycleNumber,
       },
     };
-    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:[]};document.addEventListener('click',(event)=>{const element=event.target instanceof Element?event.target.closest('[data-testid],[data-test],button,a,input,select,textarea,[role]'):null;const tag=element?.tagName?.toLowerCase?.()||'element';const testId=element?.getAttribute?.('data-testid')||element?.getAttribute?.('data-test')||'';const id=element?.id||'';const selector=(id?'#'+CSS.escape(id):testId?tag+'[data-testid="'+CSS.escape(testId)+'"]':tag).slice(0,240);const clicks=globalThis.__voidrDesktopSignals?.clicks;if(Array.isArray(clicks)){clicks.push({selector,x:Math.round(event.clientX),y:Math.round(event.clientY)});if(clicks.length>50)clicks.shift()}},{capture:true,passive:true});(()=>{const collector=globalThis.VoidrCollector;const durableStop=typeof collector?.stopAndFinalize==='function';if(!durableStop)return{sessionId:null,ready:false,durableStop:false};return Promise.resolve(collector.init(${JSON.stringify(options)})).then(()=>({sessionId:collector.getSessionId?.()||null,ready:Boolean(collector.getSessionId?.()),durableStop:true}))})();`;
+    const code = `${this.#collectorScript}\n;globalThis.__voidrDesktopSignals={clicks:[]};document.addEventListener('click',(event)=>{const element=event.target instanceof Element?event.target.closest('[data-testid],[data-test],button,a,input,select,textarea,[role]'):null;const tag=element?.tagName?.toLowerCase?.()||'element';const testId=element?.getAttribute?.('data-testid')||element?.getAttribute?.('data-test')||'';const id=element?.id||'';const selector=(id?'#'+CSS.escape(id):testId?tag+'[data-testid="'+CSS.escape(testId)+'"]':tag).slice(0,240);const clicks=globalThis.__voidrDesktopSignals?.clicks;if(Array.isArray(clicks)){clicks.push({selector,x:Math.round(event.clientX),y:Math.round(event.clientY)});if(clicks.length>50)clicks.shift()}},{capture:true,passive:true});(()=>{const collector=globalThis.VoidrCollector;const durableStop=typeof collector?.stopAndFinalize==='function';const reportsReadiness=typeof collector?.isCaptureReady==='function';if(!durableStop||!reportsReadiness)return{sessionId:null,ready:false,durableStop:false};return Promise.resolve(collector.init(${JSON.stringify(options)})).then(()=>({sessionId:collector.getSessionId?.()||null,ready:collector.isCaptureReady(),durableStop:true}))})();`;
     const result = (await this.#view.webContents.executeJavaScriptInIsolatedWorld(COLLECTOR_WORLD, [{ code }])) as
       { sessionId?: unknown; ready?: unknown; durableStop?: unknown } | undefined;
     if (result?.durableStop !== true) {

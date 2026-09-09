@@ -24,7 +24,9 @@ Voidr Platform continua sendo a experiência canônica de replay, comparação, 
   até o gate de segurança.
 - Autenticação de produção: OAuth PKCE com login organizacional; o token fica somente na memória do
   processo principal e as chamadas de Loops usam bearer token org-scoped.
-- Não incluídos neste corte: região livre, Appium/scrcpy, iOS, proxy de API e atualização automática.
+- Atualização assistida: o app consulta o contrato público de compatibilidade, bloqueia uma versão
+  abaixo da mínima, baixa o instalador assinado por URL temporária, valida seu SHA-256 e o abre.
+- Não incluídos neste corte: região livre, Appium/scrcpy, iOS e proxy de API.
 
 ## Executar
 
@@ -73,6 +75,9 @@ uma segunda cópia manual desse nome nos secrets.
 O artefato do workflow já sai com `capture/<versão>/...` e `capture/latest.json`, no layout consumido
 pelo Service. Ao promover para o bucket privado, envie primeiro os arquivos versionados e publique
 `latest.json` por último. Nunca distribua a um cliente o DMG gerado localmente com assinatura ad-hoc.
+O publicador grava `minimumSupportedVersion` no manifesto. Use
+`--minimum-supported-version <semver>` para manter uma versão anterior compatível durante rollout;
+sem o parâmetro, somente a versão publicada pode iniciar novos testes.
 
 ## Android
 

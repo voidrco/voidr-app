@@ -6,6 +6,10 @@ const workflow = readFileSync(
   fileURLToPath(new URL('../../../.github/workflows/capture-desktop-release.yml', import.meta.url)),
   'utf8',
 );
+const publishWorkflow = readFileSync(
+  fileURLToPath(new URL('../../../.github/workflows/capture-desktop-publish.yml', import.meta.url)),
+  'utf8',
+);
 const publisher = readFileSync(
   fileURLToPath(new URL('../../scripts/publish-release.mjs', import.meta.url)),
   'utf8',
@@ -32,5 +36,33 @@ describe('Capture macOS release policy', () => {
     expect(publisher).toContain("'/usr/sbin/spctl'");
     expect(publisher).toContain("'/usr/bin/xcrun'");
     expect(publisher).toContain("['stapler', 'validate', dmg.source]");
+  });
+
+  it('publishes a complete release after a merge into the production branch', () => {
+    expect(publishWorkflow).toContain("github.ref_name == github.event.repository.default_branch");
+    expect(publishWorkflow).toContain('needs: [macos-arm64, windows-x64]');
+    expect(publishWorkflow).toContain('assemble-release.mjs');
+    expect(publishWorkflow).toContain('validate-release-transition.mjs');
+    expect(publishWorkflow).toContain('https://storage.googleapis.com/${BUCKET}/${key}');
+    expect(publishWorkflow).not.toContain('gsutil');
+    expect(publishWorkflow.indexOf('while IFS=')).toBeLessThan(
+      publishWorkflow.lastIndexOf("upload_object release/capture/latest.json capture/latest.json 'application/json'"),
+    );
+  });
+
+  it('keeps channel-specific build configuration out of channel contract tests', () => {
+    expect(publishWorkflow).not.toMatch(
+      /env:\n\s+VITE_VOIDR_CAPTURE_CHANNEL: production\n\s+CSC_IDENTITY_AUTO_DISCOVERY/,
+    );
+    expect(publishWorkflow.match(/VITE_VOIDR_CAPTURE_CHANNEL: production/g)).toHaveLength(2);
+  });
+
+  it('accepts an unsigned DMG only for the explicit internal release mode', () => {
+    expect(publishWorkflow).toMatch(
+      /if \[\[ '\$\{\{ steps\.signing\.outputs\.apple_signed \}\}' == 'true' \]\]; then\r?\n\s+codesign --verify --strict --verbose=2 "\$\{dmg_path\}"/,
+    );
+    expect(publishWorkflow.indexOf('codesign --verify --deep --strict --verbose=2 "${app_path}"')).toBeLessThan(
+      publishWorkflow.indexOf("if [[ '${{ steps.signing.outputs.apple_signed }}' == 'true' ]]")
+    );
   });
 });

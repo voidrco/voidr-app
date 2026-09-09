@@ -41,6 +41,11 @@ const manifestPath = `${releaseRoot}/latest.json`;
 const version = JSON.parse(
   readFileSync(path.join(DESKTOP_ROOT, '..', 'package.json'), 'utf8')
 ).version;
+const minimumSupportedVersion = arg('minimum-supported-version', version);
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(minimumSupportedVersion)) {
+  console.error('Invalid --minimum-supported-version. Use a semantic version.');
+  process.exit(1);
+}
 
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -144,6 +149,7 @@ const entries = builds.map((build) => {
 
 const manifest = {
   version,
+  minimumSupportedVersion,
   publishedAt: new Date().toISOString(),
   builds: [
     ...entries,

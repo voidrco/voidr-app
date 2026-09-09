@@ -185,6 +185,7 @@ const api = {
     },
   },
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
+  installUpdate: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:install-update', runtime),
   workspace: {
     pendingLink: (): Promise<DesktopWorkspaceLink | null> =>
       ipcRenderer.invoke('workspace:pending-link').then((value) =>

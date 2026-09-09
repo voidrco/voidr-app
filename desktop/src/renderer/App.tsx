@@ -70,6 +70,7 @@ import {
   type AnnotationKind,
 } from "./annotation-flow";
 import { cycleParticipantLabel } from "./cycle-identity";
+import { isVoidrTeamEmail } from "./diagnostic-access";
 import {
   initialVoiceFlow,
   initialVoiceVisualFlow,
@@ -89,6 +90,7 @@ import {
 } from "./voice-flow";
 import {
   captureChannel,
+  defaultRuntime,
   captureEnvironmentLabel,
   isPendingOrganization,
   restoreRuntime,
@@ -207,6 +209,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Notice>();
   const [doctor, setDoctor] = useState<DoctorResult>();
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [annotationFlow, setAnnotationFlow] = useState(initialAnnotationFlow);
   const [evidenceOpen, setEvidenceOpen] = useState<CapturedSignalCategory>();
@@ -279,6 +282,12 @@ function App() {
   const recording = status.stage === "recording";
   const finalizing = ["stopping", "sealed", "attaching", "processing"].includes(
     status.stage,
+  );
+  const diagnosticsAvailable = Boolean(
+    !activeCapture &&
+      homeView === "loops" &&
+      workspaceConnection === "connected" &&
+      isVoidrTeamEmail(workspaceIdentity?.user.email),
   );
   const cycleParticipant =
     status.context?.participant ?? launchResolution?.participant;
@@ -751,6 +760,21 @@ function App() {
       setBusy(false);
     }
   };
+
+  const refreshDoctor = useCallback(async () => {
+    setDoctor(await window.voidrCapture.doctor(runtime));
+  }, [runtime]);
+
+  useEffect(() => {
+    void refreshDoctor().catch(() => {
+      // The visible connection state already represents startup failures. The
+      // diagnostic can be retried explicitly without interrupting navigation.
+    });
+  }, [refreshDoctor]);
+
+  useEffect(() => {
+    if (!diagnosticsAvailable) setDiagnosticsOpen(false);
+  }, [diagnosticsAvailable]);
 
   const startWorkspaceLoop = async (loopId: string) => {
     setBusy(true);
@@ -1634,6 +1658,43 @@ function App() {
     [],
   );
 
+  const topbarStatusContent = (
+    <>
+      {workspaceIdentity && !activeCapture && homeView === "loops" && (
+        <span
+          className="capture-user-avatar"
+          title={workspaceIdentity.user.name}
+          aria-hidden="true"
+        >
+          {workspaceIdentity.user.name.charAt(0).toLocaleUpperCase("pt-BR")}
+          {workspaceIdentity.user.picture && (
+            <img
+              src={workspaceIdentity.user.picture}
+              alt=""
+              referrerPolicy="no-referrer"
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+            />
+          )}
+        </span>
+      )}
+      <StatusDot live={recording} />
+      <span>
+        {!activeCapture && homeView === "loops"
+          ? workspaceConnection === "connected"
+            ? "Conectado"
+            : workspaceConnection === "connecting"
+              ? "Conectando"
+              : workspaceConnection === "error"
+                ? "Atenção necessária"
+                : "Não conectado"
+          : copy.title}
+      </span>
+      {recording && <code>{elapsed(status.elapsedMs)}</code>}
+    </>
+  );
+
   return (
     <div
       className={`capture-shell${activeCapture ? " capture-shell-active" : ""}${finalizing ? " capture-shell-finalizing" : ""}${voicePanelOpen && recording && !voiceVisualSelecting ? " capture-shell-voice" : ""}${noteOpen && recording ? " capture-shell-note" : ""}${annotationFlow.phase === "composing" && recording ? " capture-shell-note-composer" : ""}${evidenceOpen && recording ? " capture-shell-evidence" : ""}`}
@@ -1641,6 +1702,11 @@ function App() {
       <header className="capture-topbar">
         <div className="capture-brand-slot">
           <VoidrBrand />
+          {doctor?.app.version && (
+            <span className="capture-version-label">
+              v{doctor.app.version}
+            </span>
+          )}
           {captureChannel !== "production" && (
             <span className="capture-environment-badge">
               {captureEnvironmentLabel()}
@@ -1695,42 +1761,53 @@ function App() {
             </span>
           )}
         </div>
-        <div className="capture-topbar-status" role="status">
+        <div className="capture-topbar-tools">
           <UpdateCenter blocked={activeCapture || busy || pendingAnnotations > 0} />
-          {workspaceIdentity && !activeCapture && homeView === "loops" && (
-            <span
-              className="capture-user-avatar"
-              title={workspaceIdentity.user.name}
-              aria-hidden="true"
-            >
-              {workspaceIdentity.user.name.charAt(0).toLocaleUpperCase("pt-BR")}
-              {workspaceIdentity.user.picture && (
-                <img
-                  src={workspaceIdentity.user.picture}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  onError={(event) => {
-                    event.currentTarget.style.display = "none";
-                  }}
-                />
-              )}
-            </span>
-          )}
-          <StatusDot live={recording} />
-          <span>
-            {!activeCapture && homeView === "loops"
-              ? workspaceConnection === "connected"
-                ? "Conectado"
-                : workspaceConnection === "connecting"
-                  ? "Conectando"
-                  : workspaceConnection === "error"
-                    ? "Atenção necessária"
-                    : "Não conectado"
-              : copy.title}
-          </span>
-          {recording && <code>{elapsed(status.elapsedMs)}</code>}
+        {diagnosticsAvailable ? (
+          <button
+            type="button"
+            className="capture-topbar-status capture-topbar-status-button"
+            aria-expanded={diagnosticsOpen}
+            aria-controls="capture-diagnostics-panel"
+            title="Abrir diagnóstico do ambiente · Voidr Only"
+            onClick={() => {
+              setDiagnosticsOpen((value) => !value);
+              if (!diagnosticsOpen) void refreshDoctor().catch(() => undefined);
+            }}
+          >
+            {topbarStatusContent}
+          </button>
+        ) : (
+          <div className="capture-topbar-status" role="status">
+            {topbarStatusContent}
+          </div>
+        )}
         </div>
       </header>
+
+      {diagnosticsOpen && diagnosticsAvailable && doctor && (
+        <div
+          id="capture-diagnostics-panel"
+          className="capture-diagnostics-popover"
+          role="dialog"
+          aria-label="Diagnóstico do ambiente"
+        >
+          <DoctorPanel
+            result={doctor}
+            busy={busy}
+            onUpdate={() =>
+              run(async () => {
+                await window.voidrCapture.installUpdate(runtime);
+                setFeedback({
+                  tone: "success",
+                  title: "Atualização baixada",
+                  message: "Conclua a instalação aberta pelo sistema e reinicie o Voidr Capture.",
+                });
+              })
+            }
+          />
+        </div>
+      )}
 
       {!activeCapture && (protocolError || launchFailure) && (
         <section className="capture-launch-recovery" role="alert">
@@ -2152,7 +2229,7 @@ function App() {
                 <button
                   onClick={() =>
                     run(async () =>
-                      setDoctor(await window.voidrCapture.doctor(runtime)),
+                      refreshDoctor(),
                     )
                   }
                   disabled={busy}
@@ -2163,9 +2240,25 @@ function App() {
                   <Settings2 size={13} /> Configuração avançada
                 </button>
               </section>
-              {doctor && <DoctorPanel result={doctor} />}
+              {doctor && (
+                <DoctorPanel
+                  result={doctor}
+                  busy={busy}
+                  onUpdate={() =>
+                    run(async () => {
+                      await window.voidrCapture.installUpdate(runtime);
+                    })
+                  }
+                />
+              )}
               {settingsOpen && (
-                <RuntimeSettings runtime={runtime} onChange={setRuntime} />
+                <RuntimeSettings
+                  runtime={runtime}
+                  onChange={setRuntime}
+                  onReset={() =>
+                    setRuntime({ ...defaultRuntime, organizationId: runtime.organizationId })
+                  }
+                />
               )}
             </main>
           )}
@@ -2981,14 +3074,41 @@ function StepNumber({
   );
 }
 
-function DoctorPanel({ result }: { result: DoctorResult }) {
+function DoctorPanel({
+  result,
+  busy,
+  onUpdate,
+}: {
+  result: DoctorResult;
+  busy: boolean;
+  onUpdate: () => void;
+}) {
   return (
     <Panel
       className="capture-secondary-panel"
       title="Diagnóstico do ambiente"
-      subtitle="Verifica as conexões locais sem alterar sua captura."
+      subtitle={`Status ${result.status === "ready" ? "Pronto" : result.status === "degraded" ? "Degradado" : "Bloqueado"} · ${result.compatibility.environment}`}
+      action={<Badge tone="warning">Voidr Only</Badge>}
     >
       <div className="doctor-list">
+        <div>
+          <StatusDot />
+          <strong>Capture</strong>
+          <span>
+            Instalada {result.app.version} · disponível {result.compatibility.latestVersion}
+          </span>
+          <Badge tone={result.compatibility.compatible ? (result.compatibility.updateAvailable ? "warning" : "success") : "error"}>
+            {result.compatibility.compatible ? (result.compatibility.updateAvailable ? "Atualização" : "Atual") : "Incompatível"}
+          </Badge>
+        </div>
+        <div>
+          <StatusDot />
+          <strong>Conta</strong>
+          <span>{result.authentication.detail}</span>
+          <Badge tone={result.authentication.ok ? "success" : "warning"}>
+            {result.authentication.ok ? "Conectada" : "Ação necessária"}
+          </Badge>
+        </div>
         {result.services.map(
           (check: {
             service: string;
@@ -3016,6 +3136,16 @@ function DoctorPanel({ result }: { result: DoctorResult }) {
               : "Ação necessária"}
           </Badge>
         </div>
+        {result.compatibility.updateAvailable && (
+          <div className="doctor-update-row">
+            <StatusDot />
+            <strong>Atualização</strong>
+            <span>Baixe a versão {result.compatibility.latestVersion} pela Voidr.</span>
+            <button type="button" disabled={busy} onClick={onUpdate}>
+              {busy ? "Baixando…" : "Atualizar agora"}
+            </button>
+          </div>
+        )}
       </div>
     </Panel>
   );
@@ -3024,9 +3154,11 @@ function DoctorPanel({ result }: { result: DoctorResult }) {
 function RuntimeSettings({
   runtime,
   onChange,
+  onReset,
 }: {
   runtime: LocalRuntimeConfig;
   onChange: (value: LocalRuntimeConfig) => void;
+  onReset: () => void;
 }) {
   const field = (key: keyof LocalRuntimeConfig, label: string) => (
     <label>
@@ -3053,6 +3185,9 @@ function RuntimeSettings({
         {field("platformUrl", "Platform")}
         {field("organizationId", "Organização")}
         {field("localDevKey", "Dev key")}
+        <button type="button" onClick={onReset}>
+          Restaurar configuração de {captureEnvironmentLabel()}
+        </button>
       </div>
     </Panel>
   );
