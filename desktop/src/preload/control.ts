@@ -1,3 +1,4 @@
+import { journeyStateSchema, type JourneyConfig, type JourneyState } from '../shared/journeys';
 import { contextBridge, ipcRenderer } from 'electron';
 import { z } from 'zod';
 import { updateStateSchema, type UpdateState } from '../shared/update';
@@ -74,6 +75,21 @@ export interface CaptureLaunchAcceptance {
 }
 
 const api = {
+  journeys: {
+    status: (): Promise<JourneyState> => ipcRenderer.invoke("journeys:status").then(value => journeyStateSchema.parse(value)),
+    configure: (): Promise<JourneyState> => ipcRenderer.invoke("journeys:configure").then(value => journeyStateSchema.parse(value)),
+    start: (config: JourneyConfig): Promise<JourneyState> => ipcRenderer.invoke("journeys:start", config).then(value => journeyStateSchema.parse(value)),
+    stop: (): Promise<JourneyState> => ipcRenderer.invoke("journeys:stop").then(value => journeyStateSchema.parse(value)),
+    openLogs: (): Promise<void> => ipcRenderer.invoke("journeys:open-logs"),
+    onChange: (callback: (state: JourneyState) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = journeyStateSchema.safeParse(value);
+        if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on("journeys:changed", listener);
+      return () => ipcRenderer.removeListener("journeys:changed", listener);
+    },
+  },
   updates: {
     status: (): Promise<UpdateState> => ipcRenderer.invoke('updates:status').then((value) => updateStateSchema.parse(value)),
     check: (): Promise<UpdateState> => ipcRenderer.invoke('updates:check').then((value) => updateStateSchema.parse(value)),

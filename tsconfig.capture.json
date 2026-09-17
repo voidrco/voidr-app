@@ -1,14 +1,29 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@voidr/capture-contracts": ["./packages/capture-contracts/src/index.ts"],
-      "@voidr/capture-kernel": ["./packages/capture-kernel/src/index.ts"],
-      "@voidr/capture-presentation": ["./packages/capture-presentation/src/index.ts"],
-      "@voidr/capture-design-system": ["./packages/capture-design-system/src/index.tsx"]
+      "@voidr/capture-contracts": [
+        "./packages/capture-contracts/src/index.ts"
+      ],
+      "@voidr/capture-kernel": [
+        "./packages/capture-kernel/src/index.ts"
+      ],
+      "@voidr/capture-presentation": [
+        "./packages/capture-presentation/src/index.ts"
+      ],
+      "@voidr/capture-design-system": [
+        "./packages/capture-design-system/src/index.tsx"
+      ],
+      "@voidr/loops-engine": [
+        "./packages/loops-engine/src/index.ts"
+      ]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

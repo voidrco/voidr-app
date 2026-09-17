@@ -1,3 +1,4 @@
+import { LoopsController } from './loops-controller';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -69,6 +70,7 @@ const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
 
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
+let journeys: LoopsController | undefined;
 let pendingLaunch: DesktopCaptureLaunch | undefined;
 let protocolError: string | undefined;
 let updater: CaptureUpdater | undefined;
@@ -406,6 +408,7 @@ function registerIpc(): void {
   });
   ipcMain.handle('updates:restart', (event) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return updater!.restart();
   });
   ipcMain.handle('updates:open-download', async (event) => {
@@ -427,7 +430,9 @@ function registerIpc(): void {
   });
   ipcMain.handle('capture:accept-launch', async (event, input) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     const parsed = acceptLaunchSchema.parse(input);
     const key = `${parsed.launch.loopId}:${parsed.launch.cycleId}`;
     if (launchAcceptanceFlight) {
@@ -522,12 +527,16 @@ function registerIpc(): void {
   });
   ipcMain.handle('capture:prepare-web', async (event, input) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return webCapture!.prepare(prepareWebInputSchema.parse(input));
   });
   ipcMain.handle('capture:start-web', async (event) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return webCapture!.start();
   });
   ipcMain.handle('capture:stop-web', async (event) => {
@@ -880,7 +889,7 @@ async function createWindow(): Promise<void> {
   );
   mainWindow.on('resize', () => webCapture?.resize());
   mainWindow.on('close', (event) => {
-    if (appIsQuitting || !shouldKeepCaptureAliveOnClose()) return;
+    if (appIsQuitting || (!journeys?.running && !shouldKeepCaptureAliveOnClose())) return;
     event.preventDefault();
     mainWindow?.hide();
   });
@@ -991,13 +1000,21 @@ if (!lock) {
     registerControlProtocol();
     hardenSession(session.defaultSession);
     setupUpdates();
+    journeys = new LoopsController({ window: () => mainWindow, assertSender: assertControlSender, directory,
+      captureBusy: () => Boolean(launchAcceptanceFlight || (webCapture && !["idle", "ready_for_review", "terminal_error"].includes(webCapture.status.stage))) });
+    await journeys.initialize();
     registerIpc();
     await ensureMainWindow();
     app.on('activate', () => {
       scheduleMainWindow();
     });
   });
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    if (journeys?.running) {
+      event.preventDefault();
+      void journeys.shutdown().then(() => app.quit());
+      return;
+    }
     // Native staged updates also install on a normal quit.
     if (updater && ['ready', 'installing'].includes(updater.state.phase)) {
       try { pendingLaunchStore?.save(pendingLaunch); } catch { /* next launch can use the original invite */ }

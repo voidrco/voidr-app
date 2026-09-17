@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { cp, mkdir, rm } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
@@ -38,11 +39,11 @@ const appleNotarization =
 module.exports = {
   packagerConfig: {
     asar: true,
-    // Main, preload and renderer are self-contained bundles. Forge's dependency
-    // walker does not understand npm workspace symlinks, so do not ask it to
-    // prune the monorepo graph or copy development node_modules into the app.
+    extraResource: [path.join(__dirname, ".loops-browsers")],
     prune: false,
     ignore: [
+      /(^|[/\\])\.env(?:\..*)?$/,
+      /(^|[/\\])\.loops-browsers([/\\]|$)/,
       /(^|[/\\])node_modules([/\\]|$)/,
       /(^|[/\\])src([/\\]|$)/,
       /(^|[/\\])scripts([/\\]|$)/,
@@ -66,6 +67,11 @@ module.exports = {
   },
   rebuildConfig: {},
   hooks: {
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      const target = path.join(buildPath, 'node_modules', 'playwright-core');
+      await mkdir(path.dirname(target), { recursive: true });
+      await cp(path.dirname(require.resolve('playwright-core/package.json')), target, { recursive: true });
+    },
     postPackage: async (_forgeConfig, result) => {
       if (result.platform !== 'darwin' || appleSigningIdentity) return;
       for (const outputPath of result.outputPaths) {
@@ -78,6 +84,12 @@ module.exports = {
           '-',
           path.join(outputPath, 'Voidr Capture.app'),
         ]);
+      }
+      if (!publicRelease) {
+        const source = path.join(result.outputPaths[0], 'Voidr Capture.app');
+        const destination = path.join(__dirname, '..', 'Voidr Capture.app');
+        await rm(destination, { recursive: true, force: true });
+        await cp(source, destination, { recursive: true, verbatimSymlinks: true });
       }
     },
     postMake: async (_forgeConfig, makeResults) => {

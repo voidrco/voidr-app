@@ -1,3 +1,4 @@
+import { LoopsWorkspace } from './loops/LoopsWorkspace';
 import { UpdateCenter } from "./UpdateCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -191,7 +192,8 @@ function voiceSendErrorMessage(rawMessage: string): string {
 function App() {
   const [status, setStatus] = useState<CaptureStatus>(idleStatus);
   const [statusHydrated, setStatusHydrated] = useState(false);
-  const [homeView, setHomeView] = useState<"loops" | "capture">("loops");
+  const [homeView, setHomeView] = useState<"loops" | "capture" | "journeys">("loops");
+  const [journeyRunning, setJourneyRunning] = useState(false);
   const [mode, setMode] = useState<"web" | "mobile" | "api">("web");
   const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() =>
     restoreRuntime(localStorage.getItem("voidr.capture.runtime")),
@@ -1695,6 +1697,10 @@ function App() {
     </>
   );
 
+  if (homeView === "journeys" && !activeCapture) {
+    return <LoopsWorkspace onRunning={setJourneyRunning} onBack={() => setHomeView("loops")} />;
+  }
+
   return (
     <div
       className={`capture-shell${activeCapture ? " capture-shell-active" : ""}${finalizing ? " capture-shell-finalizing" : ""}${voicePanelOpen && recording && !voiceVisualSelecting ? " capture-shell-voice" : ""}${noteOpen && recording ? " capture-shell-note" : ""}${annotationFlow.phase === "composing" && recording ? " capture-shell-note-composer" : ""}${evidenceOpen && recording ? " capture-shell-evidence" : ""}`}
@@ -1757,12 +1763,12 @@ function App() {
             <span className="capture-context-name">
               {homeView === "loops"
                 ? workspaceContextLabel(runtime)
-                : "Captura local"}
+                : homeView === "journeys" ? "Jornadas com IA" : "Captura local"}
             </span>
           )}
         </div>
         <div className="capture-topbar-tools">
-          <UpdateCenter blocked={activeCapture || busy || pendingAnnotations > 0} />
+          <UpdateCenter blocked={activeCapture || busy || journeyRunning || pendingAnnotations > 0} />
         {diagnosticsAvailable ? (
           <button
             type="button"
@@ -1823,6 +1829,7 @@ function App() {
           <aside className="capture-sidebar" aria-label="Navegação principal">
             <nav>
               <button
+                disabled={journeyRunning}
                 type="button"
                 className={homeView === "loops" ? "active" : ""}
                 onClick={() => setHomeView("loops")}
@@ -1832,6 +1839,7 @@ function App() {
               </button>
               {captureChannel !== "production" && (
                 <button
+                disabled={journeyRunning}
                   type="button"
                   className={homeView === "capture" ? "active" : ""}
                   onClick={() => setHomeView("capture")}
@@ -1840,6 +1848,10 @@ function App() {
                   <span>Nova captura</span>
                 </button>
               )}
+              <button type="button" onClick={() => setHomeView("journeys")}>
+                <Play size={16} />
+                <span>Jornadas com IA</span>
+              </button>
             </nav>
             <div className="capture-sidebar-footer">
               {workspaceIdentity && (
@@ -1852,6 +1864,7 @@ function App() {
                     {workspaceIdentity.user.email}
                   </small>
                   <button
+                disabled={journeyRunning}
                     type="button"
                     onClick={() => void disconnectWorkspace()}
                   >
@@ -1871,6 +1884,7 @@ function App() {
               </div>
               {captureChannel !== "production" && (
                 <button
+                disabled={journeyRunning}
                   type="button"
                   onClick={() => {
                     setHomeView("capture");
