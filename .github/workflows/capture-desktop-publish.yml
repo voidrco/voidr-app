@@ -5,6 +5,7 @@ on:
     paths:
       - 'desktop/**'
       - 'packages/capture-*/**'
+      - 'packages/loops-engine/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.capture.json'
@@ -88,6 +89,8 @@ jobs:
 
       - run: npm ci
       - run: npm run capture:typecheck
+      - name: Install Chromium for journey checks
+        run: node node_modules/playwright-core/cli.js install --with-deps chromium
       - run: npm run test:capture
       - run: npm run make --workspace @voidr/capture-desktop -- --arch=arm64
         env:
@@ -130,6 +133,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run capture:typecheck
+      - name: Install Chromium for journey checks
+        run: node node_modules/playwright-core/cli.js install --with-deps chromium
       - run: npm run test:capture
       - run: npm run make --workspace @voidr/capture-desktop -- --arch=x64
         env:
