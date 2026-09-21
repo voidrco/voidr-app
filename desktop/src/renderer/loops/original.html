@@ -1,0 +1,43 @@
+<div class="original-app">
+  <main id="workspace">
+    <section class="editor" aria-label="Configurar jornada">
+      <div class="heading"><h1>Jornada</h1><div class="heading-tools"><button type="button" id="example" class="text-button">Usar exemplo</button><button id="connection" class="icon-button" type="button" aria-label="Configurar acesso" title="Configurar acesso"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 6h7m4 0h3M3 14h3m4 0h7"/><circle cx="12" cy="6" r="2"/><circle cx="8" cy="14" r="2"/></svg></button></div></div>
+      <form id="journey-form">
+        <div class="form-content">
+          <label for="url">URL do produto</label>
+          <input id="url" type="url" placeholder="https://seu-produto.com" required spellcheck="false" autocomplete="off">
+          <div class="label-row"><label for="steps">Passos <span id="step-count">0 passos</span></label><button id="edit-steps" class="text-button" type="button" aria-controls="timeline steps-editor" aria-expanded="true">Ver passos</button></div>
+          <div id="steps-editor" class="journey-input"><textarea id="steps" required spellcheck="false" placeholder='Abra o cadastro de clientes.&#10;Preencha o nome com "Cliente de teste".&#10;Salve o cadastro.&#10;Verifique se o cliente aparece na lista.'></textarea><div class="input-footer"><span>Textos exatos entre aspas</span><span>Um passo por linha</span></div></div>
+          <ol id="timeline" class="timeline" aria-label="Passos da jornada" hidden></ol>
+          <div id="error" role="alert" hidden></div>
+        </div>
+        <div class="editor-bottom"><p id="connection-hint" class="hint" hidden>Use “Configurar acesso” para executar sua primeira jornada.</p><div class="controls"><button type="submit" id="start" class="primary" disabled><span aria-hidden="true">▶</span> Executar jornada</button><button type="button" id="stop" class="stop" disabled>Parar</button></div><div class="editor-footer"><kbd>⌘ ↵</kbd></div></div>
+      </form>
+    </section>
+    <section class="monitor" aria-label="Acompanhar execução">
+      <div class="monitor-header"><div class="monitor-title"><h2>Navegador</h2><span id="status" class="status" data-state="ready">Pronto para começar</span></div><div class="monitor-tools"><span id="progress" class="progress"></span><button id="focus-stop" class="stop focus-stop" type="button" disabled>Interromper</button><button id="focus" class="icon-button" type="button" aria-pressed="false" aria-label="Expandir navegador" title="Expandir navegador"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></button></div></div>
+      <div class="browser-preview">
+        <div class="browser-bar"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 7h14"/></svg><span id="page-url">Aguardando uma jornada</span><span id="elapsed">0 s</span></div>
+        <form id="intervention" class="intervention" hidden autocomplete="off">
+          <p>Clique na página para interagir. Para preencher, selecione o campo e envie o valor abaixo.</p>
+          <div class="intervention-controls"><input id="intervention-value" type="password" maxlength="2000" autocomplete="off" aria-label="Valor para o campo selecionado" placeholder="Valor para o campo selecionado"><button type="submit">Preencher</button><button id="intervention-enter" type="button">Enter</button><button id="intervention-resume" type="button">Continuar teste</button></div>
+        </form>
+        <div class="preview-surface"><div id="empty-preview"><svg class="empty-icon" viewBox="0 0 64 48" fill="none" aria-hidden="true"><rect x="1" y="1" width="62" height="46" rx="5"/><path d="M1 12h62M8 7h2m4 0h2m4 0h2"/></svg><h3>Seu produto, em execução.</h3><p>Informe a URL e descreva a jornada.<br>O navegador aparece aqui ao executar.</p></div><img id="screenshot" alt="Página em execução" hidden>
+          <svg id="agent-overlay" class="agent-overlay" viewBox="0 0 1280 900" aria-hidden="true" hidden><rect id="agent-target" rx="5"/><circle id="agent-ripple" r="10"/><g id="agent-cursor"><path d="M0 0 5 23l5-8 9-3Z"/></g></svg>
+          <div id="agent-caption" class="agent-caption" hidden><span id="agent-phase"></span><span id="agent-label"></span></div>
+        </div>
+      </div>
+      <section class="console" aria-label="Atividade da jornada">
+        <div class="activity-header"><div class="console-tabs"><button id="toggle-activity" type="button" aria-expanded="true" aria-controls="console-body"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>Atividade <span id="event-count">0</span></button><button id="toggle-latency" type="button" aria-pressed="false" aria-controls="latency-panel">Latências</button></div><button id="output" class="text-button" disabled>Abrir evidências <span aria-hidden="true">↗</span></button></div>
+        <div id="console-body" class="console-body"><div id="activity" class="activity" role="log" aria-live="polite"><p class="empty-activity">Aguardando execução. As ações serão registradas aqui.</p></div><div id="result" class="result" hidden><strong id="result-title"></strong><p id="result-description"></p><span id="result-meta"></span></div></div>
+        <section id="latency-panel" class="latency-panel" aria-label="Diagnóstico de latências" hidden>
+          <div class="latency-toolbar"><label for="latency-step">Escopo</label><select id="latency-step"><option value="current">Passo atual</option></select><strong id="latency-total">0 ms medidos</strong></div>
+          <p id="latency-current" class="latency-current">Aguardando medições</p>
+          <div class="latency-grid"><div id="latency-breakdown"></div><div class="latency-operations"><table><thead><tr><th>Operação</th><th>Vezes</th><th>Tempo próprio</th></tr></thead><tbody id="latency-rows"></tbody></table></div></div>
+          <p id="latency-overhead" class="latency-note"></p><p class="latency-note">Os tempos incluem a análise, o carregamento da página e as interações durante a jornada.</p>
+        </section>
+      </section>
+    </section>
+  </main>
+  <template id="step-template"><li class="step" data-state="pending"><span class="step-marker"></span><div class="step-content"><p class="step-instruction"></p><div class="step-meta"><span class="step-state">Aguardando</span><span class="step-duration"></span></div><p class="step-detail" hidden></p><button type="button" class="step-timings">Ver tempos</button></div></li></template>
+</div>

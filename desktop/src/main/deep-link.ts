@@ -96,6 +96,7 @@ export function parseDesktopCaptureLaunch(input: string): DesktopCaptureLaunch {
 }
 
 export function parseDesktopWorkspaceLink(input: string): DesktopWorkspaceLink {
+  if (input.length > 4096) throw new Error("O link excede o tamanho permitido.");
   const url = new URL(input);
   if (
     url.protocol !== "voidr:" ||
@@ -110,10 +111,10 @@ export function parseDesktopWorkspaceLink(input: string): DesktopWorkspaceLink {
   const keys = [...url.searchParams.keys()];
   if (
     keys.length < 3 ||
-    keys.length > 4 ||
+    keys.length > 6 ||
     new Set(keys).size !== keys.length ||
     keys.some(
-      (key) => !["organization", "v", "deployment", "preview"].includes(key),
+      (key) => !["organization", "v", "deployment", "preview", "loop", "run"].includes(key),
     ) ||
     url.searchParams.get("v") !== "1"
   ) {
@@ -121,6 +122,8 @@ export function parseDesktopWorkspaceLink(input: string): DesktopWorkspaceLink {
   }
   return desktopWorkspaceLinkSchema.parse({
     version: VOIDR_WORKSPACE_LINK_VERSION,
+    aiTester: url.searchParams.has('loop') || url.searchParams.has('run')
+      ? { loopId: url.searchParams.get('loop'), runId: url.searchParams.get('run') } : undefined,
     organizationId: url.searchParams.get("organization"),
     deployment: url.searchParams.get("deployment"),
     previewSlug: url.searchParams.get("preview") ?? undefined,

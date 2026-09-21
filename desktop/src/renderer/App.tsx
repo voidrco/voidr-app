@@ -1,3 +1,6 @@
+import { monitorAiLaunchInbox } from './ai-launch-inbox';
+import { WorkspaceLogin } from "./WorkspaceLogin";
+import { AiTesterWorkspace } from './loops/AiTesterWorkspace';
 import { UpdateCenter } from "./UpdateCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,6 +15,7 @@ import {
   Link2,
   ListChecks,
   Loader2,
+  LogOut,
   Maximize2,
   MessageSquare,
   Mic,
@@ -191,7 +195,11 @@ function voiceSendErrorMessage(rawMessage: string): string {
 function App() {
   const [status, setStatus] = useState<CaptureStatus>(idleStatus);
   const [statusHydrated, setStatusHydrated] = useState(false);
-  const [homeView, setHomeView] = useState<"loops" | "capture">("loops");
+  const [homeView, setHomeView] = useState<"loops" | "capture" | "journeys">("loops");
+  const [pendingAiLaunch, setPendingAiLaunch] = useState<DesktopWorkspaceLink['aiTester']>();
+  const aiLaunchFlight = useRef(false);
+  const attemptedAiLaunches = useRef(new Set<string>());
+  const [journeyRunning, setJourneyRunning] = useState(false);
   const [mode, setMode] = useState<"web" | "mobile" | "api">("web");
   const [runtime, setRuntime] = useState<LocalRuntimeConfig>(() =>
     restoreRuntime(localStorage.getItem("voidr.capture.runtime")),
@@ -205,6 +213,8 @@ function App() {
   const [workspaceIdentity, setWorkspaceIdentity] =
     useState<DesktopWorkspaceIdentity>();
   const [workspaceAuthError, setWorkspaceAuthError] = useState("");
+  const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
+  const workspaceLoginAttempt = useRef({ automatic: false });
   const [recordingUrl, setRecordingUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Notice>();
@@ -473,6 +483,10 @@ function App() {
   const applyWorkspaceLink = useCallback(
     (link: DesktopWorkspaceLink) => {
       const current = statusRef.current;
+      if (journeyRunning) {
+        setFeedback({ tone: "warning", title: "Conclua o Voidr AI antes de trocar de workspace", message: "A execução atual continua vinculada à organização de origem." });
+        return;
+      }
       if (
         [
           "recording",
@@ -493,16 +507,15 @@ function App() {
       }
       try {
         const nextRuntime = runtimeForWorkspaceLink(link, runtime);
+        setPendingAiLaunch(link.aiTester);
         setRuntime(nextRuntime);
         setWorkspaceIdentity(undefined);
         setWorkspaceAuthError("");
-        setWorkspaceConnection("disconnected");
+        workspaceLoginAttempt.current.automatic = true;
+        setWaitingForWorkspace(false);
+        setWorkspaceConnection("connecting");
         setHomeView("loops");
-        setFeedback({
-          tone: "info",
-          title: "Workspace sincronizado pela Web",
-          message: "Confirme sua conta para carregar os Loops deste cliente.",
-        });
+        setFeedback(undefined);
       } catch (error) {
         setFeedback({
           tone: "error",
@@ -511,7 +524,7 @@ function App() {
         });
       }
     },
-    [runtime],
+    [runtime, journeyRunning],
   );
 
   useEffect(() => {
@@ -616,15 +629,36 @@ function App() {
   }, [acceptLaunch, statusHydrated]);
 
   useEffect(() => {
-    const unsubscribe = window.voidrCapture.workspace.onLink((link) => {
-      void window.voidrCapture.workspace.pendingLink().catch(() => undefined);
-      applyWorkspaceLink(link);
-    });
-    void window.voidrCapture.workspace.pendingLink().then((link) => {
-      if (link) applyWorkspaceLink(link);
-    });
-    return unsubscribe;
-  }, [applyWorkspaceLink]);
+    const reconciliation = { active: true, running: false };
+    const reconcile = async () => {
+      if (reconciliation.running) return;
+      reconciliation.running = true;
+      try {
+        const link = await window.voidrCapture.workspace.pendingLink();
+        if (reconciliation.active && link) applyWorkspaceLink(link);
+      } catch {}
+      finally { reconciliation.running = false; }
+    };
+    const unsubscribe = window.voidrCapture.workspace.onLink(() => void reconcile());
+    const timer = waitingForWorkspace ? window.setInterval(() => void reconcile(), 1500) : undefined;
+    window.addEventListener("focus", reconcile);
+    void reconcile();
+    return () => {
+      reconciliation.active = false;
+      unsubscribe();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", reconcile);
+    };
+  }, [applyWorkspaceLink, waitingForWorkspace]);
+
+  useEffect(() => {
+    if (!waitingForWorkspace) return;
+    const timer = window.setTimeout(() => {
+      setWaitingForWorkspace(false);
+      setWorkspaceAuthError("A conexão expirou. Entre novamente para continuar.");
+    }, 300_000);
+    return () => window.clearTimeout(timer);
+  }, [waitingForWorkspace]);
 
   useEffect(() => {
     localStorage.setItem(
@@ -641,8 +675,12 @@ function App() {
     setWorkspaceConnection("connecting");
     void window.voidrCapture.workspace
       .session(runtime)
-      .then((identity) => {
+      .then(async (cachedIdentity) => {
         if (!active) return;
+        const identity = cachedIdentity ?? (workspaceLoginAttempt.current.automatic
+          ? await window.voidrCapture.workspace.connect(runtime) : null);
+        if (!active) return;
+        workspaceLoginAttempt.current.automatic = false;
         setWorkspaceIdentity(identity ?? undefined);
         setWorkspaceConnection(identity ? "connected" : "disconnected");
       })
@@ -657,35 +695,58 @@ function App() {
   }, [runtime]);
 
   const connectWorkspace = useCallback(async () => {
-    if (isPendingOrganization(runtime.organizationId)) {
-      await window.voidrCapture.workspace.openPlatform(runtime);
-      return;
-    }
-    setWorkspaceConnection("connecting");
     setWorkspaceAuthError("");
+    setWaitingForWorkspace(true);
     try {
-      const identity = await window.voidrCapture.workspace.connect(runtime);
-      setWorkspaceIdentity(identity);
-      setWorkspaceConnection("connected");
-      setFeedback({
-        tone: "success",
-        title: `${identity.name} conectado`,
-        message: `Sessão confirmada como ${identity.user.email}.`,
-      });
+      await window.voidrCapture.workspace.openPlatform(runtime);
     } catch (error) {
-      const message = safeError(error);
-      setWorkspaceIdentity(undefined);
-      setWorkspaceAuthError(message);
-      setWorkspaceConnection("error");
+      setWaitingForWorkspace(false);
+      setWorkspaceAuthError(safeError(error));
     }
   }, [runtime]);
 
   const disconnectWorkspace = useCallback(async () => {
+    setPendingAiLaunch(undefined);
     await window.voidrCapture.workspace.disconnect(runtime);
     setWorkspaceIdentity(undefined);
     setWorkspaceAuthError("");
     setWorkspaceConnection("disconnected");
   }, [runtime]);
+
+  useEffect(() => {
+    if (!pendingAiLaunch || workspaceConnection !== 'connected' || !workspaceIdentity || aiLaunchFlight.current) return;
+    aiLaunchFlight.current = true;
+    setPendingAiLaunch(undefined);
+    setHomeView('journeys');
+    void window.voidrCapture.aiTester.start({ runtime, ...pendingAiLaunch }).catch(error => {
+      setFeedback({ tone: 'error', title: 'Não foi possível iniciar o Voidr AI', message: safeError(error) });
+    }).finally(() => { aiLaunchFlight.current = false; });
+  }, [pendingAiLaunch, workspaceConnection, workspaceIdentity, runtime]);
+
+  useEffect(() => {
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(runtime.serviceUrl).hostname);
+    if (!local || !statusHydrated || workspaceConnection !== 'connected' || !workspaceIdentity || journeyRunning || busy
+      || !['idle', 'ready_for_review', 'terminal_error'].includes(status.stage)) return;
+    if (typeof window.voidrCapture.aiTester.pendingLaunches !== 'function') {
+      setFeedback({ tone: 'warning', title: 'Reabra o desktop para receber os testes',
+        message: 'A integração foi atualizada. Feche e abra o app novamente; a solicitação da plataforma está salva.' });
+      return;
+    }
+    return monitorAiLaunchInbox({
+      api: window.voidrCapture.aiTester, runtime,
+      receive: launches => {
+        const launch = launches.find(item => !attemptedAiLaunches.current.has(item.runId));
+        if (launch && !aiLaunchFlight.current) {
+          attemptedAiLaunches.current.add(launch.runId);
+          setPendingAiLaunch(launch);
+        }
+      },
+      healthy: () => setFeedback(previous => ['Não foi possível receber testes da plataforma', 'Reconectando à plataforma'].includes(previous?.title ?? '') ? undefined : previous),
+      unavailable: () => setFeedback(previous => previous && !['Não foi possível receber testes da plataforma', 'Reconectando à plataforma'].includes(previous.title)
+        ? previous : { tone: 'warning', title: 'Reconectando à plataforma',
+          message: 'O recebimento de novos testes está temporariamente indisponível. Tentaremos novamente automaticamente; os resultados já salvos permanecem disponíveis.' }),
+    });
+  }, [runtime, workspaceConnection, workspaceIdentity, journeyRunning, statusHydrated, status.stage, busy]);
 
   useEffect(() => {
     if (!recording) return;
@@ -775,6 +836,17 @@ function App() {
   useEffect(() => {
     if (!diagnosticsAvailable) setDiagnosticsOpen(false);
   }, [diagnosticsAvailable]);
+
+  const startAiTester = async (loopId: string) => {
+    setBusy(true);
+    try { await window.voidrCapture.aiTester.start({ runtime, loopId }); setHomeView('journeys'); }
+    catch (error) { setFeedback({ tone: 'error', title: 'Não foi possível iniciar o Voidr AI', message: safeError(error) }); }
+    finally { setBusy(false); }
+  };
+  const openAiTester = async (loopId: string, runId: string) => {
+    try { await window.voidrCapture.aiTester.view({ runtime, loopId, runId }); setHomeView('journeys'); }
+    catch (error) { setFeedback({ tone: 'error', title: 'Não foi possível abrir o teste', message: safeError(error) }); }
+  };
 
   const startWorkspaceLoop = async (loopId: string) => {
     setBusy(true);
@@ -1658,6 +1730,11 @@ function App() {
     [],
   );
 
+  if (!workspaceIdentity && !activeCapture) {
+    return <WorkspaceLogin waiting={waitingForWorkspace} connecting={workspaceConnection === "connecting"}
+      error={workspaceAuthError} onConnect={connectWorkspace} />;
+  }
+
   const topbarStatusContent = (
     <>
       {workspaceIdentity && !activeCapture && homeView === "loops" && (
@@ -1679,7 +1756,7 @@ function App() {
           )}
         </span>
       )}
-      <StatusDot live={recording} />
+      <StatusDot live={recording} connected={!activeCapture && homeView === "loops" && workspaceConnection === "connected"} />
       <span>
         {!activeCapture && homeView === "loops"
           ? workspaceConnection === "connected"
@@ -1750,19 +1827,19 @@ function App() {
               </span>
               <span>
                 <strong>{workspaceIdentity.name}</strong>
-                <small>Workspace do cliente</small>
+                <small>{workspaceIdentity.user.name || workspaceIdentity.user.email}</small>
               </span>
             </button>
           ) : (
             <span className="capture-context-name">
               {homeView === "loops"
                 ? workspaceContextLabel(runtime)
-                : "Captura local"}
+                : homeView === "journeys" ? "Voidr AI" : "Captura local"}
             </span>
           )}
         </div>
         <div className="capture-topbar-tools">
-          <UpdateCenter blocked={activeCapture || busy || pendingAnnotations > 0} />
+          <UpdateCenter blocked={activeCapture || busy || journeyRunning || pendingAnnotations > 0} />
         {diagnosticsAvailable ? (
           <button
             type="button"
@@ -1819,12 +1896,16 @@ function App() {
       )}
 
       {!activeCapture && (
-        <div className="capture-idle-layout">
+        <div className="capture-idle-layout" data-sidebar-collapsed={homeView === "journeys"}>
           <aside className="capture-sidebar" aria-label="Navegação principal">
             <nav>
               <button
+                disabled={journeyRunning}
                 type="button"
                 className={homeView === "loops" ? "active" : ""}
+                aria-label="Loops"
+                title="Loops"
+                aria-current={homeView === "loops" ? "page" : undefined}
                 onClick={() => setHomeView("loops")}
               >
                 <ListChecks size={15} />
@@ -1832,14 +1913,29 @@ function App() {
               </button>
               {captureChannel !== "production" && (
                 <button
+                disabled={journeyRunning}
                   type="button"
                   className={homeView === "capture" ? "active" : ""}
+                  aria-label="Nova captura"
+                  title="Nova captura"
+                  aria-current={homeView === "capture" ? "page" : undefined}
                   onClick={() => setHomeView("capture")}
                 >
                   <Plus size={15} />
                   <span>Nova captura</span>
                 </button>
               )}
+              <button
+                type="button"
+                className={homeView === "journeys" ? "active" : ""}
+                aria-label="Voidr AI"
+                title="Voidr AI"
+                aria-current={homeView === "journeys" ? "page" : undefined}
+                onClick={() => setHomeView("journeys")}
+              >
+                <VoidrMark size={16} />
+                <span>Voidr AI</span>
+              </button>
             </nav>
             <div className="capture-sidebar-footer">
               {workspaceIdentity && (
@@ -1852,10 +1948,14 @@ function App() {
                     {workspaceIdentity.user.email}
                   </small>
                   <button
+                disabled={journeyRunning}
                     type="button"
+                    aria-label="Desconectar"
+                    title={`Desconectar ${workspaceIdentity.user.email}`}
                     onClick={() => void disconnectWorkspace()}
                   >
-                    Desconectar
+                    <LogOut className="capture-account-icon" size={15} />
+                    <span>Desconectar</span>
                   </button>
                 </div>
               )}
@@ -1871,7 +1971,10 @@ function App() {
               </div>
               {captureChannel !== "production" && (
                 <button
+                disabled={journeyRunning}
                   type="button"
+                  aria-label="Configurações"
+                  title="Configurações"
                   onClick={() => {
                     setHomeView("capture");
                     setSettingsOpen(true);
@@ -1889,14 +1992,10 @@ function App() {
               runtime={runtime}
               busy={busy}
               connectionRequired={!workspaceIdentity}
-              organizationSelected={
-                !isPendingOrganization(runtime.organizationId)
-              }
-              connectionState={workspaceConnection}
-              connectionError={workspaceAuthError}
-              onConnectWorkspace={connectWorkspace}
               onConnectionChange={setWorkspaceConnection}
               onStartLoop={startWorkspaceLoop}
+              onStartAi={startAiTester}
+              onOpenAi={(loopId, runId) => void openAiTester(loopId, runId)}
               onOpenCycle={(loopId, cycleId) =>
                 void window.voidrCapture.openCycle({
                   platformUrl: runtime.platformUrl,
@@ -1905,6 +2004,8 @@ function App() {
                 })
               }
             />
+          ) : homeView === "journeys" ? (
+            <AiTesterWorkspace runtime={runtime} onRunning={setJourneyRunning} />
           ) : (
             <main className="capture-home">
               <section className="capture-intro">

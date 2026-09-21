@@ -1,3 +1,5 @@
+import { isAuthenticatedLocalRuntime } from './local-auth-runtime';
+import { loopApplicationSchema, loopEnvironmentSchema, createLoopInputSchema, createdLoopSchema, type CreateLoopInput } from '../shared/loop-creation';
 import { z } from "zod";
 import {
   desktopCaptureLaunchSchema,
@@ -198,6 +200,7 @@ function loopWorkspaceState(value: unknown): DesktopLoopWorkspaceState {
 
 function participantName(value: unknown): string | null {
   const participant = record(value);
+  if (participant.identityType === "ai_tester" || stringValue(participant.actorId).startsWith("ai-tester:") || /^(AI Tester|Voidr AI)$/i.test(stringValue(participant.name).trim())) return "Voidr AI";
   return (
     stringValue(participant.name, "", 160) ||
     stringValue(participant.email, "", 160) ||
@@ -311,6 +314,9 @@ export class VoidrServiceClient {
 
   constructor(runtime: unknown) {
     this.runtime = localRuntimeConfigSchema.parse(runtime);
+    const endpoints = [this.runtime.serviceUrl, this.runtime.platformUrl, this.runtime.collectorUrl, this.runtime.collectorScriptUrl];
+    if (!this.runtime.localAdapter && endpoints.some(value => new URL(value).protocol !== 'https:') && !isAuthenticatedLocalRuntime(this.runtime))
+      throw new Error('HTTP autenticado é permitido apenas no ambiente local de desenvolvimento.');
   }
 
   async workspaceIdentity(
@@ -347,6 +353,54 @@ export class VoidrServiceClient {
     });
   }
 
+  private async loopCreationFixture(accessToken?: string) {
+    return record(await jsonRequest(`${this.runtime.serviceUrl}/${this.loopRoot()}/fixtures/itau-agro`, {
+      method: 'POST', headers: this.workspaceHeaders(accessToken),
+    }));
+  }
+
+  async loopApplications(accessToken?: string) {
+    if (this.runtime.localAdapter) {
+      const fixture = await this.loopCreationFixture(accessToken);
+      return [loopApplicationSchema.parse({ id: fixture.applicationId, name: fixture.applicationName, type: fixture.applicationType })];
+    }
+    const values = await jsonRequest<unknown[]>(`${this.runtime.serviceUrl}/applications?page=1&limit=100&sortBy=name&sortDir=asc`, {
+      headers: this.workspaceHeaders(accessToken),
+    });
+    return values.map(value => {
+      const item = record(value);
+      return loopApplicationSchema.parse({ id: item._id ?? item.id, name: item.name, type: item.type });
+    }).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  }
+
+  async loopEnvironments(applicationId: string, accessToken?: string) {
+    if (this.runtime.localAdapter) {
+      const fixture = await this.loopCreationFixture(accessToken);
+      if (fixture.applicationId !== applicationId) throw new Error('Aplicação não encontrada.');
+      return [loopEnvironmentSchema.parse({ slug: fixture.environmentSlug, name: fixture.environmentName, applicationUrl: fixture.targetUrl })];
+    }
+    const values = await jsonRequest<unknown[]>(`${this.runtime.serviceUrl}/applications/${encodeURIComponent(applicationId)}/environments`, {
+      headers: this.workspaceHeaders(accessToken),
+    });
+    return values.map(value => loopEnvironmentSchema.parse(value));
+  }
+
+  async createLoop(input: CreateLoopInput, accessToken?: string) {
+    const parsed = createLoopInputSchema.parse(input);
+    const [applications, environments] = await Promise.all([
+      this.loopApplications(accessToken), this.loopEnvironments(parsed.applicationId, accessToken),
+    ]);
+    const application = applications.find(item => item.id === parsed.applicationId);
+    const environment = environments.find(item => item.slug === parsed.environmentSlug);
+    if (!application || !environment) throw new Error('Selecione uma aplicação e um ambiente disponíveis.');
+    const applicationType = ['API', 'MOBILE'].includes(application.type) ? application.type : 'WEB';
+    const result = record(await jsonRequest(`${this.runtime.serviceUrl}/${this.loopRoot()}`, {
+      method: 'POST', headers: { ...this.workspaceHeaders(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...parsed, applicationType }),
+    }));
+    return createdLoopSchema.parse({ id: result.id ?? result.scenarioId, reused: result.reused === true });
+  }
+
   async listLoops(remoteAccessToken?: string): Promise<DesktopLoopSummary[]> {
     const values = await jsonRequest<unknown[]>(
       `${this.runtime.serviceUrl}/${this.loopRoot()}`,
@@ -371,7 +425,7 @@ export class VoidrServiceClient {
             picture: participantAvatarUrl(participant),
           };
         });
-      const testCount = integerValue(testCounts.total ?? item.cycle);
+      const testCount = integerValue(testCounts.total ?? item.cycle) + integerValue(item.aiTestCount);
       return desktopLoopSummarySchema.parse({
         id: stringValue(item.id),
         name: stringValue(item.name, "Loop sem nome", 300),
@@ -383,7 +437,7 @@ export class VoidrServiceClient {
           "default",
         ),
         status: stringValue(item.status, "recording", 80),
-        cycleCount: testCount,
+        cycleCount: integerValue(testCounts.total ?? item.cycle),
         sessionsRecorded: integerValue(item.sessionsRecorded),
         workspaceState: loopWorkspaceState(
           workspace.state ?? latest.status ?? item.status,
@@ -954,6 +1008,33 @@ export class VoidrServiceClient {
       "x-voidr-dev-key": this.runtime.localDevKey,
       "x-voidr-organization-id": organizationId,
     };
+  }
+
+  aiTesterRequest<T>(input: { loopId: string; path?: string; body?: unknown; accessToken?: string }): Promise<T> {
+    return jsonRequest<T>(`${this.runtime.serviceUrl}/${this.loopRoot()}/${encodeURIComponent(input.loopId)}/ai-tester${input.path ?? ''}`, {
+      method: input.body === undefined ? 'GET' : 'POST',
+      headers: { ...this.workspaceHeaders(input.accessToken), 'Content-Type': 'application/json' },
+      ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+    });
+  }
+
+  aiTesterPendingLaunches(accessToken?: string) {
+    const root = this.runtime.localAdapter ? 'loop-test-dev' : 'loop-test';
+    return jsonRequest<Array<{ loopId: string; runId: string }>>(`${this.runtime.serviceUrl}/${root}/ai-tester-launches`, {
+      headers: this.workspaceHeaders(accessToken),
+    });
+  }
+
+  async aiTesterLaunchStream(signal: AbortSignal, accessToken?: string): Promise<Response> {
+    const root = this.runtime.localAdapter ? 'loop-test-dev' : 'loop-test';
+    const response = await fetch(`${this.runtime.serviceUrl}/${root}/ai-tester-launches/stream`, {
+      headers: { ...this.workspaceHeaders(accessToken), Accept: 'text/event-stream' }, signal, redirect: 'error',
+    });
+    if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
+      await response.body?.cancel();
+      throw new Error(`Canal de novos testes indisponível (HTTP ${response.status}).`);
+    }
+    return response;
   }
 
   private workspaceHeaders(remoteAccessToken?: string): Record<string, string> {

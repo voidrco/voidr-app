@@ -106,7 +106,7 @@ describe("desktop experience contract", () => {
 
   it("makes Loops the operational Home with real tests, participants and evidence", () => {
     expect(appSource).toMatch(
-      /useState<["']loops["']\s*\|\s*["']capture["']>\(["']loops["']\)/,
+      /useState<["']loops["']\s*\|\s*["']capture["']\s*\|\s*["']journeys["']>\(["']loops["']\)/,
     );
     expect(appSource).toContain("<WorkspaceHome");
     expect(workspaceSource).toContain("workspace.listLoops(runtime)");

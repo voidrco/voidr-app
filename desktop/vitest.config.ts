@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       '@voidr/capture-contracts': path.join(directory, '../packages/capture-contracts/src/index.ts'),
       '@voidr/capture-kernel': path.join(directory, '../packages/capture-kernel/src/index.ts'),
+      '@voidr/loops-engine': path.join(directory, '../packages/loops-engine/src/index.ts'),
     },
   },
   test: {

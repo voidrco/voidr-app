@@ -26,7 +26,7 @@ describe('capture deployment channels', () => {
   it('keeps a local link on loopback and binds its organization', () => {
     expect(runtimeForDeployment('local', local, 'org_fixture')).toMatchObject({
       serviceUrl: 'http://127.0.0.1:3000/v1',
-      localAdapter: true,
+      localAdapter: false,
       localDevKey: 'voidr-verification-local',
       organizationId: 'org_fixture',
     });
@@ -73,7 +73,7 @@ describe('capture deployment channels', () => {
     expect(restored).toMatchObject({
       organizationId: 'org_blip',
       serviceUrl: 'http://127.0.0.1:3000/v1',
-      localAdapter: true,
+      localAdapter: false,
       localDevKey: 'voidr-verification-local',
     });
     expect(JSON.parse(serializeWorkspaceBinding(restored))).toEqual({

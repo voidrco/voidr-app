@@ -5,4 +5,11 @@ out/
 *.local
 *.log
 .DS_Store
+
 .env
+.env.*
+!.env.example
+.runs/
+runs/
+.loops-browsers/
+Voidr Capture.app/

@@ -310,6 +310,7 @@ describe("VoidrServiceClient", () => {
                 environmentSlug: "local",
                 status: "recording",
                 cycle: 1,
+                aiTestCount: 3,
                 sessionsRecorded: 1,
                 updatedAt: "2026-08-13T12:00:00.000Z",
                 latestCycle: {
@@ -434,7 +435,8 @@ describe("VoidrServiceClient", () => {
       name: "Itaú Agro",
       environment: "local",
       workspaceState: "collecting",
-      testCount: 2,
+      testCount: 5,
+      cycleCount: 2,
       participantCount: 2,
       evidenceCount: 9,
       participants: [

@@ -21,6 +21,13 @@ const remoteRuntime = {
 };
 
 describe('workspace session', () => {
+  it('renews a saved session without opening an interactive login', async () => {
+    const auth = { accessToken: vi.fn(), cachedAccessToken: vi.fn(), restoreAccessToken: vi.fn().mockResolvedValue('renewed-token') };
+    const session = await createWorkspaceSession({ ...remoteRuntime, organizationId: 'org_test' }, auth);
+    expect(session.accessToken).toBe('renewed-token');
+    expect(auth.restoreAccessToken).toHaveBeenCalledWith('organization', 'org_test');
+    expect(auth.accessToken).not.toHaveBeenCalled();
+  });
   it('does not authenticate the explicit localhost adapter', async () => {
     const accessToken = vi.fn();
     const cachedAccessToken = vi.fn();
@@ -86,7 +93,7 @@ describe('workspace session', () => {
       'org_XpZs54aP8Oop8qUz',
     );
     expect(workspacePlatformLoopsUrl(stagingRuntime)).toBe(
-      'https://staging.voidr.co/loops?capture=desktop',
+      'https://staging.voidr.co/choose-organization?capture=desktop',
     );
   });
 
@@ -124,7 +131,7 @@ describe('workspace session', () => {
         ...remoteRuntime,
         organizationId: 'org_gWjyShjiTKA1ndtD',
       }),
-    ).toBe('https://platform.voidr.co/loops?capture=desktop');
+    ).toBe('https://platform.voidr.co/choose-organization?capture=desktop');
 
     expect(
       workspacePlatformLoopsUrl({
@@ -133,7 +140,7 @@ describe('workspace session', () => {
         platformUrl: 'https://pilot.app-preview.voidr.co',
         organizationId: 'org_gWjyShjiTKA1ndtD',
       }),
-    ).toBe('https://pilot.app-preview.voidr.co/loops?capture=desktop');
+    ).toBe('https://pilot.app-preview.voidr.co/choose-organization?capture=desktop');
 
     expect(() =>
       workspacePlatformLoopsUrl({

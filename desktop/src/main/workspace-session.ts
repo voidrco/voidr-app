@@ -1,3 +1,4 @@
+import { isAuthenticatedLocalRuntime } from './local-auth-runtime';
 import {
   PENDING_CAPTURE_ORGANIZATION_ID,
   localRuntimeConfigSchema,
@@ -8,6 +9,7 @@ import {
 import { VoidrServiceClient } from './service-client';
 
 type OrganizationAuthSession = {
+  restoreAccessToken?(profile: 'organization', organizationId: string): Promise<string | undefined>;
   accessToken(
     profile: 'organization',
     organizationId: string,
@@ -45,6 +47,8 @@ function assertTrustedWorkspaceRuntime(runtime: LocalRuntimeConfig): void {
     return;
   }
 
+  if (isAuthenticatedLocalRuntime(runtime)) return;
+
   const production =
     service.origin === 'https://api.voidr.co' &&
     service.pathname.replace(/\/+$/, '') === '/v1' &&
@@ -78,7 +82,7 @@ function assertTrustedWorkspaceRuntime(runtime: LocalRuntimeConfig): void {
 export function workspacePlatformLoopsUrl(runtimeInput: unknown): string {
   const runtime = localRuntimeConfigSchema.parse(runtimeInput);
   assertTrustedWorkspaceRuntime(runtime);
-  const url = new URL('/loops', runtime.platformUrl);
+  const url = new URL('/choose-organization', runtime.platformUrl);
   url.searchParams.set('capture', 'desktop');
   return url.toString();
 }
@@ -96,7 +100,9 @@ export async function createWorkspaceSession(
       'Conecte este aplicativo ao seu workspace pela plataforma Voidr.',
     );
   }
-  const accessToken = auth.cachedAccessToken('organization', runtime.organizationId);
+  const accessToken = auth.restoreAccessToken
+    ? await auth.restoreAccessToken('organization', runtime.organizationId)
+    : auth.cachedAccessToken('organization', runtime.organizationId);
   if (!accessToken) {
     throw new Error(
       'Sua sessão do workspace não está conectada. Entre com sua conta Voidr para continuar.',

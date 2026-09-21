@@ -11,6 +11,11 @@ app resolve o Cycle autenticado antes de iniciar qualquer adapter. O descriptor
 carrega somente o `organizationId` não secreto necessário para selecionar o tenant;
 ele nunca concede acesso por si só.
 
+## Jornadas com IA
+
+O desktop inclui uma engine local Jev + Playwright na aba **Jornadas com IA**.
+Configuração, execução e evidências: [`desktop/LOOPS.md`](./desktop/LOOPS.md).
+
 ## Desenvolvimento
 
 Requer Node.js 22 ou superior.

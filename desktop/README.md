@@ -22,8 +22,11 @@ Voidr Platform continua sendo a experiência canônica de replay, comparação, 
   resumível.
 - API: Cycle e surface chegam ao app sem cair no adapter Web; proxy/CA ainda permanecem indisponíveis
   até o gate de segurança.
-- Autenticação de produção: OAuth PKCE com login organizacional; o token fica somente na memória do
-  processo principal e as chamadas de Loops usam bearer token org-scoped.
+- Autenticação: OAuth PKCE com sessão persistida em `userData/auth-sessions`, criptografada pelo
+  `safeStorage` do sistema e isolada por organização, issuer, client e audience. Tokens nunca vão ao renderer.
+  Rebuilds preservam a sessão; desenvolvimento e app instalado mantêm diretórios separados.
+  A renovação silenciosa usa `offline_access` quando o provedor emite refresh token. Sem ele, a sessão
+  persiste até o access token expirar. Logout remove a sessão salva; sem criptografia segura, usa apenas memória.
 - Atualização assistida: o app consulta o contrato público de compatibilidade, bloqueia uma versão
   abaixo da mínima, baixa o instalador assinado por URL temporária, valida seu SHA-256 e o abre.
 - Não incluídos neste corte: região livre, Appium/scrcpy, iOS e proxy de API.
@@ -38,6 +41,24 @@ npm run typecheck
 npm test
 npm run dev
 ```
+
+O desenvolvimento usa o perfil separado `Voidr Capture Development` e pode ficar aberto
+junto com o app instalado. A interface atualiza com HMR; mudanças no processo principal
+ou preload exigem reiniciar `npm run dev`. Para usar outro perfil, defina
+`VOIDR_CAPTURE_DEV_USER_DATA_DIR` com um caminho absoluto.
+Sem conexão própria, o perfil padrão de desenvolvimento reutiliza a referência ao `.env`
+do TypeSafe configurado no app instalado. Perfis personalizados permanecem isolados.
+
+No desenvolvimento padrão, o desktop usa o login da plataforma local e as rotas autenticadas
+em `http://127.0.0.1:3000/v1`. Clique em **Entrar com a Voidr** e escolha a organização na plataforma.
+O desktop aguarda o retorno e reconcilia o vínculo automaticamente. Uma sessão válida
+é reaproveitada; quando necessário, a autenticação continua no navegador. O header mostra a organização retornada por `/auth/me`.
+A vinculação em desenvolvimento usa um retorno de uso único em loopback, sem tokens de login
+na URL; assim o link não abre uma cópia antiga do app instalado.
+
+O adaptador com identidade fictícia fica restrito a fixtures: defina
+`VITE_VOIDR_CAPTURE_LOCAL_ADAPTER=true` ao iniciar o desktop e habilite o adaptador correspondente
+no serviço. Isso não é necessário para testar com a conta da plataforma.
 
 Com o ambiente Verification local ativo, o smoke cria/reutiliza o fixture checkout-retry, realiza
 uma captura real, anexa screenshot, sela a Session e aguarda o Cycle:

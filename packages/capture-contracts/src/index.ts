@@ -110,6 +110,7 @@ export type DesktopCaptureLaunch = z.infer<typeof desktopCaptureLaunchSchema>;
 export const desktopWorkspaceLinkSchema = z
   .object({
     version: z.literal(VOIDR_WORKSPACE_LINK_VERSION),
+    aiTester: z.object({ loopId: boundedId, runId: z.string().uuid() }).optional(),
     organizationId: boundedId.regex(/^org_[A-Za-z0-9]+$/),
     deployment: z.enum(["local", "preview", "staging", "production"]),
     previewSlug: z
@@ -253,7 +254,7 @@ export const localRuntimeConfigSchema = z
           message: "O adapter local aceita somente endpoints de loopback.",
         });
       }
-      if (!runtime.localAdapter && url.protocol !== "https:") {
+      if (!runtime.localAdapter && url.protocol !== "https:" && !isLoopbackHostname(url.hostname)) {
         context.addIssue({
           code: "custom",
           path: [key],

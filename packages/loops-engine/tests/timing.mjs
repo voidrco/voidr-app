@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { RunTiming } from '../src/timing.ts';
+const clock = { now: 0 }, events = [];
+const timing = new RunTiming(span => events.push(span), () => clock.now);
+timing.step(2);
+await timing.measure('playwright', 'Ação', async () => {
+  clock.now += 3;
+  await timing.measure('capture', 'Captura', async () => { clock.now += 7; });
+  clock.now += 5;
+});
+timing.step(null);
+await assert.rejects(timing.measure('jev', 'Requisição com falha', async () => {
+  clock.now += 11; throw new Error('Teste');
+}));
+clock.now += 4;
+const result = timing.snapshot();
+assert.equal(result.spans[0].durationMs, 15);
+assert.equal(result.spans[0].selfMs, 8);
+assert.equal(result.spans[1].selfMs, 7);
+assert.equal(result.spans[1].parentId, result.spans[0].id);
+assert.equal(result.spans[1].stepIndex, 2);
+assert.equal(result.spans[2].status, 'error');
+assert.equal(result.spans[2].selfMs, 11);
+assert.equal(result.spans[2].stepIndex, null);
+assert.equal(result.unmeasuredMs, 4);
+assert.equal(result.durationMs, 30);
+assert.equal(events[0].status, 'running');
+assert.equal(events[0].durationMs, undefined);
+assert.equal(result.spans.reduce((sum, span) => sum + span.selfMs, 0) + result.unmeasuredMs, result.durationMs);
+console.log('OK: tempos exclusivos, atribuição por passo, falhas e tempo fora das medições.');

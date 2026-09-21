@@ -1,3 +1,9 @@
+import { encryptedAuthTokenStore } from './auth-token-store';
+import { AiLaunchStream } from './ai-launch-stream';
+import { DevelopmentWorkspaceLink } from './development-workspace-link';
+import { createLoopInputSchema } from '../shared/loop-creation';
+import { AiTesterController } from "./ai-tester-controller";
+import { LoopsController } from './loops-controller';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -40,11 +46,9 @@ import {
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
 const isAutomation = !app.isPackaged && process.env.VOIDR_CAPTURE_E2E === '1';
-const developmentUserDataDir = process.env.VOIDR_CAPTURE_DEV_USER_DATA_DIR;
+const developmentUserDataDir = process.env.VOIDR_CAPTURE_DEV_USER_DATA_DIR
+  || (isDevelopment ? path.join(app.getPath('appData'), 'Voidr Capture Development') : undefined);
 if (!app.isPackaged && developmentUserDataDir && path.isAbsolute(developmentUserDataDir)) {
-  // Keep source-checkout smoke tests isolated from an installed Capture. This
-  // also gives the development instance its own single-instance lock without
-  // touching the user's production session or ledger.
   app.setPath('userData', path.resolve(developmentUserDataDir));
 }
 const TOP_BAR_HEIGHT = 58;
@@ -69,6 +73,9 @@ const CONTROL_PANEL_HEIGHT: Record<ControlPanelMode, number> = {
 
 let mainWindow: BrowserWindow | undefined;
 let webCapture: WebCaptureController | undefined;
+let journeys: LoopsController | undefined;
+let aiTester: AiTesterController;
+const developmentWorkspaceLink = new DevelopmentWorkspaceLink();
 let pendingLaunch: DesktopCaptureLaunch | undefined;
 let protocolError: string | undefined;
 let updater: CaptureUpdater | undefined;
@@ -77,7 +84,11 @@ let openingUpdate: Promise<unknown> | undefined;
 let pendingWorkspaceLink: DesktopWorkspaceLink | undefined;
 let mainWindowCreation: Promise<void> | undefined;
 let launchAcceptanceFlight: Promise<unknown> | undefined;
-const loopParticipantAuth = new LoopParticipantAuthSession();
+const loopParticipantAuth = new LoopParticipantAuthSession(encryptedAuthTokenStore({
+  directory: () => path.join(app.getPath('userData'), 'auth-sessions'),
+  available: durableEncryptionAvailable,
+  encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value),
+}));
 const workspaceIdentities = new Map<string, DesktopWorkspaceIdentity>();
 let launchAcceptanceKey: string | undefined;
 let activeCaptureAttempt:
@@ -392,6 +403,64 @@ function assertControlSender(event: Electron.IpcMainInvokeEvent): void {
 }
 
 function registerIpc(): void {
+  const launchStream = new AiLaunchStream(runtime => createWorkspaceSession(runtime, loopParticipantAuth));
+  const subscriptionId = z.string().uuid();
+  ipcMain.handle('ai-tester:subscribe-launches', (event, input) => {
+    assertControlSender(event);
+    const parsed = z.object({ subscriptionId, runtime: localRuntimeConfigSchema }).parse(input);
+    launchStream.start(event.sender, parsed.subscriptionId, parsed.runtime);
+  });
+  ipcMain.handle('ai-tester:unsubscribe-launches', (event, id) => {
+    assertControlSender(event);
+    launchStream.stop(event.sender, subscriptionId.parse(id));
+  });
+  const applicationInput = z.object({ runtime: localRuntimeConfigSchema, applicationId: z.string().min(1).max(200) });
+  ipcMain.handle('workspace:applications', async (event, runtime) => {
+    assertControlSender(event);
+    const session = await createWorkspaceSession(runtime, loopParticipantAuth);
+    return session.client.loopApplications(session.accessToken);
+  });
+  ipcMain.handle('workspace:environments', async (event, input) => {
+    assertControlSender(event);
+    const parsed = applicationInput.parse(input);
+    const session = await createWorkspaceSession(parsed.runtime, loopParticipantAuth);
+    return session.client.loopEnvironments(parsed.applicationId, session.accessToken);
+  });
+  ipcMain.handle('workspace:create-loop', async (event, input) => {
+    assertControlSender(event);
+    const parsed = z.object({ runtime: localRuntimeConfigSchema, input: createLoopInputSchema }).parse(input);
+    const session = await createWorkspaceSession(parsed.runtime, loopParticipantAuth);
+    return session.client.createLoop(parsed.input, session.accessToken);
+  });
+  ipcMain.handle('workspace:open-environments', async (event, input) => {
+    assertControlSender(event);
+    const parsed = applicationInput.parse(input);
+    workspacePlatformLoopsUrl(parsed.runtime);
+    await shell.openExternal(new URL(`/applications/${encodeURIComponent(parsed.applicationId)}?tab=environments`, parsed.runtime.platformUrl).toString());
+  });
+  const aiInput = workspaceLoopInputSchema.extend({ runId: z.string().uuid().optional() });
+  const aiHandlers: Record<string, (input: unknown) => unknown> = {
+    'pending-launches': async input => {
+      const runtime = localRuntimeConfigSchema.parse(input);
+      const workspace = await createWorkspaceSession(runtime, loopParticipantAuth);
+      return workspace.client.aiTesterPendingLaunches(workspace.accessToken);
+    },
+    status: () => aiTester.status(),
+    clear: () => aiTester.clear(),
+    start: input => aiTester.start(aiInput.parse(input)),
+    list: input => aiTester.list(aiInput.parse(input)),
+    scenarios: input => aiTester.scenarios(aiInput.parse(input)),
+    preparation: input => aiTester.preparation(aiInput.parse(input)),
+    view: input => aiTester.view(aiInput.parse(input)),
+    retry: input => aiTester.retry(aiInput.parse(input)),
+    cancel: () => aiTester.cancel(),
+    resume: () => aiTester.resume(),
+    artifact: input => aiTester.artifact(aiInput.extend({ artifactId: z.string().max(100) }).parse(input)),
+  };
+  Object.entries(aiHandlers).forEach(([name, handler]) => ipcMain.handle(`ai-tester:${name}`, (event, input) => {
+    assertControlSender(event);
+    return handler(input);
+  }));
   ipcMain.handle('capture:protocol-error', (event) => {
     assertControlSender(event);
     return protocolError ?? null;
@@ -406,6 +475,7 @@ function registerIpc(): void {
   });
   ipcMain.handle('updates:restart', (event) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return updater!.restart();
   });
   ipcMain.handle('updates:open-download', async (event) => {
@@ -427,7 +497,9 @@ function registerIpc(): void {
   });
   ipcMain.handle('capture:accept-launch', async (event, input) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     const parsed = acceptLaunchSchema.parse(input);
     const key = `${parsed.launch.loopId}:${parsed.launch.cycleId}`;
     if (launchAcceptanceFlight) {
@@ -522,12 +594,16 @@ function registerIpc(): void {
   });
   ipcMain.handle('capture:prepare-web', async (event, input) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return webCapture!.prepare(prepareWebInputSchema.parse(input));
   });
   ipcMain.handle('capture:start-web', async (event) => {
     assertControlSender(event);
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     await waitForOpeningUpdate();
+    if (journeys?.running) throw new Error("Aguarde a jornada com IA terminar.");
     return webCapture!.start();
   });
   ipcMain.handle('capture:stop-web', async (event) => {
@@ -685,14 +761,14 @@ function registerIpc(): void {
     workspacePlatformLoopsUrl(runtime);
     const key = workspaceIdentityKey(runtime);
     const cachedIdentity = workspaceIdentities.get(key);
-    if (cachedIdentity) return cachedIdentity;
+    if (cachedIdentity && (runtime.localAdapter || loopParticipantAuth.cachedAccessToken('organization', runtime.organizationId))) return cachedIdentity;
     if (runtime.organizationId === PENDING_CAPTURE_ORGANIZATION_ID) return null;
     if (runtime.localAdapter) {
       const identity = await connectWorkspaceSession(runtime, loopParticipantAuth);
       workspaceIdentities.set(key, identity);
       return identity;
     }
-    const accessToken = loopParticipantAuth.cachedAccessToken(
+    const accessToken = await loopParticipantAuth.restoreAccessToken(
       'organization',
       runtime.organizationId,
     );
@@ -707,6 +783,7 @@ function registerIpc(): void {
     const runtime = localRuntimeConfigSchema.parse(runtimeInput);
     const identity = await connectWorkspaceSession(runtime, loopParticipantAuth);
     workspaceIdentities.set(workspaceIdentityKey(runtime), identity);
+    scheduleMainWindow();
     return identity;
   });
   ipcMain.handle('workspace:disconnect', (event, runtimeInput) => {
@@ -742,7 +819,14 @@ function registerIpc(): void {
   });
   ipcMain.handle('workspace:open-platform', async (event, runtime) => {
     assertControlSender(event);
-    await shell.openExternal(workspacePlatformLoopsUrl(runtime));
+    const target = workspacePlatformLoopsUrl(runtime);
+    const localDevelopment = isDevelopment && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(target).hostname);
+    const url = localDevelopment ? await developmentWorkspaceLink.open(target, link => {
+      pendingWorkspaceLink = link;
+      publishPendingWorkspaceLink();
+      scheduleMainWindow();
+    }) : target;
+    await shell.openExternal(url);
   });
   ipcMain.handle('mobile:devices', async (event) => {
     assertControlSender(event);
@@ -880,7 +964,7 @@ async function createWindow(): Promise<void> {
   );
   mainWindow.on('resize', () => webCapture?.resize());
   mainWindow.on('close', (event) => {
-    if (appIsQuitting || !shouldKeepCaptureAliveOnClose()) return;
+    if (appIsQuitting || (!journeys?.running && !shouldKeepCaptureAliveOnClose())) return;
     event.preventDefault();
     mainWindow?.hide();
   });
@@ -972,6 +1056,7 @@ function registerProtocol(): void {
 
 const lock = app.requestSingleInstanceLock();
 if (!lock) {
+  if (isDevelopment) console.info('Voidr Capture dev já está aberto. Feche a instância de desenvolvimento antes de executar npm run dev novamente.');
   app.quit();
 } else {
   const initialProtocolUrl = protocolUrlFromArgv(process.argv);
@@ -991,13 +1076,27 @@ if (!lock) {
     registerControlProtocol();
     hardenSession(session.defaultSession);
     setupUpdates();
+    journeys = new LoopsController({ window: () => mainWindow, assertSender: assertControlSender, directory,
+      captureBusy: () => Boolean(launchAcceptanceFlight || (webCapture && !["idle", "ready_for_review", "terminal_error"].includes(webCapture.status.stage))) });
+    await journeys.initialize();
+    aiTester = new AiTesterController({ loops: journeys,
+      session: runtime => createWorkspaceSession(runtime, loopParticipantAuth),
+      publish: state => mainWindow?.webContents.send('ai-tester:changed', state),
+    });
+    journeys.onManagedStop = () => aiTester.cancel();
     registerIpc();
     await ensureMainWindow();
     app.on('activate', () => {
       scheduleMainWindow();
     });
   });
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    developmentWorkspaceLink.close();
+    if (journeys?.running) {
+      event.preventDefault();
+      void aiTester.cancel().catch(() => undefined).then(() => journeys!.shutdown()).then(() => app.quit());
+      return;
+    }
     // Native staged updates also install on a normal quit.
     if (updater && ['ready', 'installing'].includes(updater.state.phase)) {
       try { pendingLaunchStore?.save(pendingLaunch); } catch { /* next launch can use the original invite */ }

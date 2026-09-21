@@ -24,17 +24,18 @@
   },
   "scripts": {
     "test": "npm run test:capture",
-    "test:capture": "npm run test --workspace @voidr/capture-contracts && npm run test --workspace @voidr/capture-kernel && npm run test --workspace @voidr/capture-desktop",
+    "test:capture": "npm run test --workspace @voidr/capture-contracts && npm run test --workspace @voidr/capture-kernel && npm run test --workspace @voidr/capture-desktop && npm run test --workspace @voidr/loops-engine",
     "typecheck": "npm run capture:typecheck",
-    "capture:typecheck": "npm run typecheck --workspace @voidr/capture-contracts && npm run typecheck --workspace @voidr/capture-kernel && npm run typecheck --workspace @voidr/capture-presentation && npm run typecheck --workspace @voidr/capture-design-system && npm run typecheck --workspace @voidr/capture-desktop",
+    "capture:typecheck": "npm run typecheck --workspace @voidr/loops-engine && npm run typecheck --workspace @voidr/capture-contracts && npm run typecheck --workspace @voidr/capture-kernel && npm run typecheck --workspace @voidr/capture-presentation && npm run typecheck --workspace @voidr/capture-design-system && npm run typecheck --workspace @voidr/capture-desktop",
     "build": "npm run capture:build",
-    "capture:build": "npm run build --workspace @voidr/capture-contracts && npm run build --workspace @voidr/capture-kernel && npm run build --workspace @voidr/capture-presentation && npm run build --workspace @voidr/capture-design-system && npm run build --workspace @voidr/capture-desktop",
+    "capture:build": "npm run build --workspace @voidr/loops-engine && npm run build --workspace @voidr/capture-contracts && npm run build --workspace @voidr/capture-kernel && npm run build --workspace @voidr/capture-presentation && npm run build --workspace @voidr/capture-design-system && npm run build --workspace @voidr/capture-desktop",
     "dev": "npm run dev --workspace @voidr/capture-desktop",
     "capture:package": "npm run package --workspace @voidr/capture-desktop",
     "capture:package:local": "npm run package:local --workspace @voidr/capture-desktop",
     "capture:make": "npm run make --workspace @voidr/capture-desktop",
     "capture:make:local": "npm run make:local --workspace @voidr/capture-desktop",
-    "smoke:web": "npm run capture:build && node desktop/scripts/local-web-smoke.mjs"
+    "smoke:web": "npm run capture:build && node desktop/scripts/local-web-smoke.mjs",
+    "smoke:loops": "node desktop/scripts/smoke-loops.mjs"
   },
   "devDependencies": {
     "@electron/fuses": "^2.1.3",
