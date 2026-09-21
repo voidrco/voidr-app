@@ -1,8 +1,31 @@
 import type { Control } from "./browser.js";
 
-export function readControls(elements: Element[] | Node, frame: number) {
+export function readControls(elements: Element[] | Node, options: number | { frame: number; selectors: string[] }) {
+  const { frame, selectors } = typeof options === "number" ? { frame: options, selectors: [] } : options;
   const helpers = {
     visible(node: Element) { return node.checkVisibility({ checkVisibilityCSS: true }); },
+
+    references(node: HTMLElement) {
+      const tag = node.tagName.toLowerCase();
+      return {
+        domId: node.id,
+        selectors: [node.id ? `${tag}#${CSS.escape(node.id)}` : "",
+          ...["data-testid", "data-test", "name"].map(key => node.getAttribute(key)
+            ? `${tag}[${key}="${CSS.escape(node.getAttribute(key)!)}"]` : "")].filter(Boolean),
+        matchedSelectors: selectors.filter(selector => {
+          try { return node.matches(selector); } catch { return false; }
+        }),
+      };
+    },
+
+    section(node: HTMLElement) {
+      const state = { parent: node.parentElement };
+      for (let depth = 0; state.parent && depth < 6; depth += 1, state.parent = state.parent.parentElement) {
+        const heading = state.parent.querySelector<HTMLElement>(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > legend, :scope > [role=heading]");
+        if (heading && helpers.visible(heading)) return heading.innerText.trim().slice(0, 200);
+      }
+      return "";
+    },
 
     context(node: HTMLElement) {
       const row = node.closest<HTMLElement>("tr, [role=row], li, label");
@@ -41,10 +64,15 @@ export function readControls(elements: Element[] | Node, frame: number) {
     control(element: Element, index: number): Control[] {
       const node = element as HTMLInputElement;
       if (!helpers.visible(node) || node.disabled || node.closest('[inert], [aria-disabled="true"]') || node.readOnly
-        || ["hidden", "password", "file"].includes(node.type)) return [];
+        || ["hidden", "file"].includes(node.type)) return [];
       return [{ index, frame, tag: node.tagName.toLowerCase(), type: node.getAttribute("role") ?? node.type ?? "",
-        name: helpers.name(node), value: node.isContentEditable ? node.innerText : node.value ?? "",
-        checked: node.checked ?? node.getAttribute("aria-checked") === "true",
+        ...helpers.references(node), visibleText: (node.innerText ?? "").trim().slice(0, 350),
+        ariaLabel: node.getAttribute("aria-label") ?? "", placeholder: node.placeholder ?? "", section: helpers.section(node),
+        expanded: node.getAttribute("aria-expanded"), controlsId: node.getAttribute("aria-controls") ?? "",
+        required: node.required || node.getAttribute("aria-required") === "true",
+        name: helpers.name(node), value: node.type === "password" ? (node.value ? "[redacted]" : "")
+          : node.isContentEditable ? node.innerText : node.value ?? "",
+        checked: node.checked ?? node.getAttribute("aria-checked") === "true", focused: node.matches(":focus"),
         href: node.getAttribute("href") ? new URL(node.getAttribute("href")!, document.baseURI).href : "",
         min: node.min ?? "", max: node.max ?? "", step: node.step ?? "", editable: node.isContentEditable,
         context: helpers.context(node), availability: helpers.availability(node), inModal: Boolean(modal?.contains(node)),

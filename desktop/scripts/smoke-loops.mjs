@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,15 @@ try {
   );
   assert.equal(state.result?.status, "completed");
   assert.equal(state.completedSteps, 8);
+  assert.equal(state.result.assertions.length, 2);
+  assert.ok(state.result.assertions.every(assertion => assertion.status === 'passed'));
+  assert.ok((await stat(state.result.artifacts.videos[0])).size > 1000);
+  assert.deepEqual(state.result.artifacts.errors, []);
+  assert.equal(await page.locator('#verification').count(), 0);
+  assert.equal(await page.locator('.step-assertion').count(), 2);
+  await page.locator('.step-assertion').first().click();
+  await page.locator('#agent-overlay[data-kind=assert][data-phase=passed]').waitFor();
+  await page.screenshot({ path: path.join(output, 'assertion.png') });
   assert.ok(
     state.timings.some((span) => span.category === "jev" && span.selfMs > 0),
   );
@@ -90,9 +99,10 @@ try {
   await page.getByRole('button', { name: 'Expandir navegador', exact: true }).click();
   await page.locator('#workspace[data-focus=true]').waitFor();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '← Voltar aos Loops', exact: true }).click();
+  await page.getByRole('button', { name: 'Loops', exact: true }).click();
   await page.getByRole('button', { name: 'Jornadas com IA', exact: true }).click();
   await page.locator('#result-title').waitFor();
+  assert.equal(await page.locator('.step-assertion').count(), 2);
   assert.equal(await page.locator("#agent-overlay").count(), 1);
 } finally {
   await application.close();

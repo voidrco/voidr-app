@@ -81,8 +81,8 @@ export function VoidrBrand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export function StatusDot({ live = false }: { live?: boolean }) {
-  return <span className={`vdr-status-dot${live ? ' vdr-status-dot-live' : ''}`} aria-hidden="true" />;
+export function StatusDot({ live = false, connected = false }: { live?: boolean; connected?: boolean }) {
+  return <span className="vdr-status-dot" data-live={live} data-connected={connected} aria-hidden="true" />;
 }
 
 export function Tabs<T extends string>({
@@ -115,9 +115,9 @@ export function Tabs<T extends string>({
   );
 }
 
-export function VoidrMark({ size = 28, active = false }: { size?: 24 | 28 | 30 | 40 | 56; active?: boolean }) {
+export function VoidrMark({ size = 28, active = false }: { size?: number; active?: boolean }) {
   return (
-    <span className={`vdr-mark vdr-mark-${size}${active ? ' vdr-mark-active' : ''}`} aria-hidden="true">
+    <span className={`vdr-mark vdr-mark-${size}${active ? ' vdr-mark-active' : ''}`} aria-hidden="true" style={{ width: size, height: size }}>
       <svg viewBox="0 0 283 283">
         <path fillRule="evenodd" clipRule="evenodd" d={markPath} />
       </svg>

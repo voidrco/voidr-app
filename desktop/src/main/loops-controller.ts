@@ -16,10 +16,15 @@ import {
   applyJourneyEvent,
   journeyConfigSchema,
   journeyEventSchema,
+  journeyInputSchema,
   type JourneyState,
+  type JourneyEvent,
 } from "../shared/journeys";
 
 export class LoopsController {
+  onManagedStop?: () => Promise<unknown>;
+  private reserved = false;
+  private managed?: { resolve: (state: JourneyState) => void; onEvent: (event: JourneyEvent) => void };
   private worker?: UtilityProcess;
   private stopTimer?: ReturnType<typeof setTimeout>;
   private envFile?: string;
@@ -46,8 +51,37 @@ export class LoopsController {
   ) {}
 
   get running() {
-    return this.state.running || Boolean(this.worker);
+    return this.reserved || this.state.running || Boolean(this.worker);
   }
+  reserve() {
+    if (this.running || this.deps.captureBusy()) throw new Error('Já existe uma captura ou jornada em execução.');
+    if (!this.state.configured) throw new Error('Configure o acesso do Voidr AI em Voidr AI.');
+    this.reserved = true;
+  }
+
+  release() { this.reserved = false; }
+
+  showStandalone() {
+    if (this.running) throw new Error('Aguarde a execução terminar.');
+    this.state = { ...this.state, managed: false, managedRunId: undefined, finalizing: false, result: undefined, error: undefined, events: [], timings: [] };
+    return this.publish();
+  }
+
+  resume() { if (this.state.intervening && !this.state.stopping) this.worker?.postMessage({ type: 'resume' }); }
+
+  private input(input: unknown) {
+    if (!this.state.running || !this.state.intervening || this.state.stopping) throw new Error('O navegador não está aguardando sua interação.');
+    this.worker?.postMessage({ type: 'input', input: journeyInputSchema.parse(input) });
+  }
+
+  async executePlanned(input: { runId: string; config: unknown; secrets: Record<string, string>; collector?: import('./ai-collector-worker').AiCollectorInput; outputRoot: string; onEvent: (event: JourneyEvent) => void }) {
+    if (!this.reserved || this.worker) throw new Error('O executor não está disponível.');
+    const completed = new Promise<JourneyState>(resolve => { this.managed = { resolve, onEvent: input.onEvent }; });
+    await this.start(input.config, input);
+    if (!this.worker && this.managed) { this.managed.resolve(this.state); this.managed = undefined; }
+    return completed;
+  }
+
   private get root() {
     return path.join(app.getPath("userData"), "loops");
   }
@@ -59,17 +93,27 @@ export class LoopsController {
     return this.state;
   }
 
-  async initialize() {
+  private async readConnection(root: string) {
     try {
       const connection = JSON.parse(
-        await readFile(path.join(this.root, "connection.json"), "utf8"),
+        await readFile(path.join(root, "connection.json"), "utf8"),
       );
       if (
         typeof connection.envFile === "string" &&
         path.isAbsolute(connection.envFile)
       )
-        this.envFile = connection.envFile;
+        return connection.envFile as string;
     } catch {}
+  }
+
+  async initialize() {
+    this.envFile = await this.readConnection(this.root);
+    if (!this.envFile && !app.isPackaged && process.env.VOIDR_CAPTURE_DEV_SERVER_URL
+      && !process.env.VOIDR_CAPTURE_DEV_USER_DATA_DIR) {
+      this.envFile = await this.readConnection(
+        path.join(app.getPath("appData"), "Voidr Capture", "loops"),
+      );
+    }
     if (!app.isPackaged && process.env.VOIDR_LOOPS_ENV_FILE)
       this.envFile = process.env.VOIDR_LOOPS_ENV_FILE;
     this.state.configured = await this.credentials().then(
@@ -85,7 +129,7 @@ export class LoopsController {
       : process.env;
     const key = env.TYPESAFE_API_KEY?.trim();
     if (!key)
-      throw new Error("Selecione um arquivo .env com TYPESAFE_API_KEY.");
+      throw new Error("Selecione um arquivo de acesso válido.");
     return {
       TYPESAFE_API_KEY: key,
       TYPESAFE_DEFAULT_MODEL: env.TYPESAFE_DEFAULT_MODEL || "jev-latest",
@@ -95,7 +139,7 @@ export class LoopsController {
   private async configure() {
     if (this.running) throw new Error("Aguarde a jornada terminar.");
     const result = await dialog.showOpenDialog(this.deps.window()!, {
-      title: "Selecionar .env do TypeSafe",
+      title: "Selecionar arquivo de acesso",
       properties: ["openFile", "showHiddenFiles"],
     });
     if (result.canceled || !result.filePaths[0]) return this.state;
@@ -105,7 +149,7 @@ export class LoopsController {
       await this.credentials();
     } catch {
       this.envFile = previous;
-      throw new Error("Arquivo inválido: informe TYPESAFE_API_KEY.");
+      throw new Error("Este arquivo não contém um acesso válido. Selecione outro arquivo.");
     }
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     await writeFile(
@@ -117,14 +161,17 @@ export class LoopsController {
     return this.publish();
   }
 
-  private async start(input: unknown) {
-    if (this.running || this.deps.captureBusy())
+  private async start(input: unknown, planned?: { runId: string; secrets: Record<string, string>; collector?: import('./ai-collector-worker').AiCollectorInput; outputRoot: string }) {
+    if ((!planned && this.running) || this.deps.captureBusy())
       throw new Error("Já existe uma captura ou jornada em execução.");
     const config = journeyConfigSchema.parse(input);
     this.state = {
+      managed: Boolean(planned),
+      managedRunId: planned?.runId,
       revision: this.state.revision,
       running: true,
       stopping: false,
+      finalizing: false,
       configured: this.state.configured,
       config,
       example: this.state.example,
@@ -153,14 +200,16 @@ export class LoopsController {
       this.worker.postMessage({
         type: "start",
         config,
-        outputRoot: path.join(this.root, "runs"),
+        outputRoot: planned?.outputRoot ?? path.join(this.root, "runs"),
+        secrets: planned?.secrets,
+        collector: planned?.collector,
       });
     } catch {
       clearTimeout(this.stopTimer);
       this.receive({
         type: "fatal",
         message:
-          "Não foi possível iniciar. Verifique a configuração do TypeSafe e o navegador instalado.",
+          "Não foi possível iniciar. Confira seu acesso e tente novamente.",
       });
     }
     return this.state;
@@ -175,6 +224,7 @@ export class LoopsController {
         ? redactText(parsed.data.message)
         : undefined,
     };
+    this.managed?.onEvent(event);
     this.state = applyJourneyEvent(this.state, event);
     this.publish();
   }
@@ -189,6 +239,8 @@ export class LoopsController {
           ? "Execução interrompida. As evidências parciais podem estar incompletas."
           : "O processo da jornada encerrou inesperadamente.",
       });
+    this.managed?.resolve(this.state);
+    this.managed = undefined;
     this.publish();
   }
 
@@ -197,13 +249,14 @@ export class LoopsController {
     this.state.stopping = true;
     this.worker?.postMessage({ type: "stop" });
     const worker = this.worker;
-    this.stopTimer = setTimeout(() => worker?.kill(), 15_000);
+    this.stopTimer = setTimeout(() => worker?.kill(), this.reserved ? 90_000 : 15_000);
     return this.publish();
   }
 
   async shutdown() {
     if (!this.worker) {
       this.stop();
+      this.reserved = false;
       this.state.running = false;
       return;
     }
@@ -219,13 +272,16 @@ export class LoopsController {
       status: () => this.state,
       configure: () => this.configure(),
       start: (input) => this.start(input),
-      stop: () => this.stop(),
+      stop: async () => { if (this.reserved) await this.onManagedStop?.(); return this.stop(); },
+      input: input => this.input(input),
+      resume: () => this.resume(),
       "open-logs": async () => {
-        await mkdir(path.join(this.root, "runs"), {
+        const directory = this.state.result?.output ?? path.join(this.root, "runs");
+        await mkdir(directory, {
           recursive: true,
           mode: 0o700,
         });
-        const error = await shell.openPath(path.join(this.root, "runs"));
+        const error = await shell.openPath(directory);
         if (error) throw new Error("Não foi possível abrir a pasta de logs.");
       },
     };

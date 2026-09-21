@@ -10,5 +10,5 @@ export const example = {
     'Remova o produto "Blue Top" do carrinho.',
     "Confirme que o carrinho está vazio.",
   ],
-  expected: ["Cart is empty!"],
+  expected: [],
 };

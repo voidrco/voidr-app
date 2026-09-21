@@ -3,13 +3,13 @@ export function parseJourney(text) {
 }
 
 export class JourneyTimeline {
-  state = { active: -1, started: new Map(), editing: true };
+  state = { active: -1, started: new Map(), editing: true, assertions: new Map() };
 
   constructor(elements) { this.elements = elements; }
 
   render(steps) {
     const { list, template, count } = this.elements;
-    this.state.active = -1; this.state.started.clear();
+    this.state.active = -1; this.state.started.clear(); this.state.assertions.clear();
     count.textContent = `${steps.length} ${steps.length === 1 ? "passo" : "passos"}`;
     list.replaceChildren(...steps.map((instruction, index) => {
       const row = template.content.firstElementChild.cloneNode(true);
@@ -46,7 +46,7 @@ export class JourneyTimeline {
     const list = this.elements.list;
     const bounds = list.getBoundingClientRect(), target = row.getBoundingClientRect();
     if (target.top < bounds.top || target.bottom > bounds.bottom) {
-      list.scrollTop += target.top - bounds.top - 18;
+      list.scrollTo({ top: list.scrollTop + target.top - bounds.top - 18, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
     }
   }
 
@@ -66,6 +66,17 @@ export class JourneyTimeline {
     row.querySelector(".step-duration").textContent = started === undefined ? "" : `${((performance.now() - started) / 1000).toFixed(1)} s`;
   }
 
+  assertion(assertion) {
+    const row = this.elements.list.children[assertion.stepIndex];
+    if (!row) return;
+    this.state.assertions.set(assertion.stepIndex, assertion);
+    const button = row.querySelector('.step-assertion') ?? document.createElement('button');
+    button.type = 'button'; button.className = 'step-assertion'; button.dataset.status = assertion.status;
+    button.textContent = assertion.status === 'passed' ? '✓ Verificação · Ver evidência' : assertion.status === 'unverified' ? '? Não foi possível verificar · Ver evidência' : '✕ Divergência · Ver evidência';
+    button.title = assertion.instruction;
+    row.querySelector('.step-content').append(button);
+  }
+
   finish(result) {
     Array.from(this.elements.list.children).forEach((row, index) => {
       row.removeAttribute("aria-current");
@@ -76,7 +87,8 @@ export class JourneyTimeline {
       row.dataset.state = index === result.completedSteps ? (result.status === "cancelled" ? "cancelled" : "error") : "pending";
       row.querySelector(".step-state").textContent = index === result.completedSteps ? (result.status === "cancelled" ? "Interrompido" : "Precisa de revisão") : "Não executado";
       row.querySelector(".step-detail").hidden = index !== result.completedSteps;
-      if (index === result.completedSteps) row.querySelector(".step-detail").textContent = result.reason;
+      if (index === result.completedSteps) row.querySelector(".step-detail").textContent = result.reason || outcomeMessage(result.status);
     });
   }
 }
+import { outcomeMessage } from "./presentation.js";

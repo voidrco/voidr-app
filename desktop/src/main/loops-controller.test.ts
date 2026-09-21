@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +64,40 @@ afterEach(async () => {
 });
 
 describe("journey process boundary", () => {
+  it.each([
+    { profile: "", configured: true },
+    { profile: "/isolated-test-profile", configured: false },
+  ])("restores the installed connection only for default dev ($profile)", async ({ profile, configured }) => {
+    const { controller } = await fixture();
+    const connection = path.join(mock.root, "Voidr Capture", "loops");
+    await mkdir(connection, { recursive: true });
+    await writeFile(path.join(connection, "connection.json"), JSON.stringify({ envFile: path.join(mock.root, ".env") }));
+    vi.stubEnv("VOIDR_LOOPS_ENV_FILE", "");
+    vi.stubEnv("TYPESAFE_API_KEY", "");
+    vi.stubEnv("VOIDR_CAPTURE_DEV_SERVER_URL", "http://127.0.0.1:4173");
+    vi.stubEnv("VOIDR_CAPTURE_DEV_USER_DATA_DIR", profile);
+    await controller.initialize();
+    expect(await invoke("status")).toMatchObject({ configured });
+    expect(JSON.stringify(await invoke("status"))).not.toContain("fake-test-key");
+  });
+
+  it("keeps the dev connection instead of replacing it with the installed connection", async () => {
+    const { controller, worker } = await fixture();
+    const connection = path.join(mock.root, "loops");
+    const envFile = path.join(mock.root, ".env.dev");
+    await mkdir(connection, { recursive: true });
+    await writeFile(envFile, "TYPESAFE_API_KEY=dev-test-key");
+    await writeFile(path.join(connection, "connection.json"), JSON.stringify({ envFile }));
+    vi.stubEnv("VOIDR_LOOPS_ENV_FILE", "");
+    vi.stubEnv("VOIDR_CAPTURE_DEV_SERVER_URL", "http://127.0.0.1:4173");
+    await controller.initialize();
+    await invoke("start", config);
+    expect(mock.fork).toHaveBeenCalledWith(expect.any(String), [], expect.objectContaining({
+      env: expect.objectContaining({ TYPESAFE_API_KEY: "dev-test-key" }),
+    }));
+    worker.emit("exit", 0);
+  });
+
   it("validates sender and config before spawning a worker", async () => {
     await fixture();
     mock.sender.mockImplementationOnce(() => {

@@ -40,7 +40,7 @@ assert.equal(recovery.fail({kind:'no_action',reason:'No action',outcome:'not_exe
 
 const answer = choice => ({type:'choice',choice,confidence:1,probabilities:{[choice]:1}});
 const state = { satisfied:0 };
-const client = {systemOne: async () => ({answers:{status:answer('done'),next:answer('a0'),satisfied:{type:'noul',noul:state.satisfied}},usage:{input_tokens:0,output_tokens:0},model:'test'})};
+const client = {systemOne: async () => ({answers:{needsHuman:{type:'noul',noul:0},status:answer('done'),next:answer('a0'),satisfied:{type:'noul',noul:state.satisfied}},usage:{input_tokens:0,output_tokens:0},model:'test'})};
 const decide = createDecider(client);
 const input = {steps:['Search for Blue Top'],stepIndex:0,observation,actions:[action],history:['Filled search']};
 assert.equal((await decide(input)).answer.choice,'a0');

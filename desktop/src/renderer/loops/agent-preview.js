@@ -1,4 +1,4 @@
-const phases = { target: "Localizando alvo", acting: "Interagindo", typing: "Digitando", settled: "Conferindo resultado" };
+const phases = { target: "Localizando alvo", acting: "Interagindo", typing: "Digitando", settled: "Conferindo resultado", scrolling: "Rolando", checking: "Verificando condição", passed: "✓ Verificação confirmada", failed: "✕ Verificação falhou" };
 const verbs = { click: "Clicando", fill: "Preenchendo", select: "Selecionando", check: "Marcando", uncheck: "Desmarcando", enter: "Pressionando Enter" };
 
 export class AgentPreview {
@@ -26,7 +26,7 @@ export class AgentPreview {
   }
 
   resize() {
-    const { image, overlay, size, scaleLabel } = this.elements;
+    const { image, overlay } = this.elements;
     if (image.hidden || !image.naturalWidth) return;
     const { width, height } = image.parentElement.getBoundingClientRect();
     const scale = Math.min(1, width / image.naturalWidth, height / image.naturalHeight);
@@ -35,21 +35,19 @@ export class AgentPreview {
     overlay.setAttribute("viewBox", `0 0 ${image.naturalWidth} ${image.naturalHeight}`);
     if (!this.state.point) this.moveCursor({ point: { x: image.naturalWidth / 2, y: image.naturalHeight / 2 } });
     overlay.removeAttribute("hidden");
-    size.textContent = `${image.naturalWidth} × ${image.naturalHeight}`;
-    scaleLabel.textContent = `${Math.round(scale * 100)}% · Ajustado`;
   }
 
   renderInteraction() {
     const interaction = this.state.interaction;
-    const { overlay, target, caption, phase, label, status } = this.elements;
+    const { overlay, target, caption, phase, label } = this.elements;
     overlay.toggleAttribute("hidden", this.elements.image.hidden);
     target.toggleAttribute("hidden", !interaction?.target);
-    caption.hidden = !interaction || interaction.phase === "settled";
+    caption.hidden = !interaction || interaction.phase === "settled" || interaction.kind === "assert";
     if (!interaction) return;
     phase.textContent = interaction.phase === "acting" ? verbs[interaction.kind] : phases[interaction.phase];
     label.textContent = interaction.label;
-    status.textContent = phases[interaction.phase];
     overlay.dataset.phase = interaction.phase;
+    overlay.dataset.kind = interaction.kind;
     if (!interaction.target || !interaction.point) return;
     Object.entries(interaction.target).forEach(([key, value]) => target.setAttribute(key, String(value)));
     this.moveCursor(interaction);
@@ -81,6 +79,10 @@ export class AgentPreview {
     this.elements.caption.hidden = true;
     this.elements.ripple.getAnimations().forEach(animation => animation.cancel());
     this.renderInteraction();
-    this.elements.status.textContent = status;
+  }
+
+  inspect(assertion) {
+    this.state.terminal = false;
+    return this.showFrame({ screenshot: assertion.screenshot, interaction: assertion.interaction, url: assertion.url });
   }
 }

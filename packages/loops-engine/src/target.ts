@@ -1,23 +1,12 @@
 import type { ElementHandle, Page } from "playwright-core";
 import { unmeasured, type Measure } from "./timing.js";
+import { scrollTarget, streamScroll } from "./scroll.js";
 
 type Point = { x: number; y: number };
 type Box = Point & { width: number; height: number };
 export type PreparedTarget = { box: Box; point: Point; position: Point; viewport: { width: number; height: number } };
-type TargetOptions = { target: ElementHandle; page: Page; signal?: AbortSignal; measure?: Measure };
+type TargetOptions = { target: ElementHandle; page: Page; signal?: AbortSignal; measure?: Measure; onScrollFrame?: (screenshot: string) => void };
 export class TargetBlockedError extends Error {}
-
-async function centerTarget(target: ElementHandle, alignment: "center" | "start" | "end") {
-  await target.evaluate((node, block) => (node as Element).scrollIntoView({ block, inline: "center", behavior: "instant" }), alignment);
-  const state = { frame: await target.ownerFrame() };
-  while (state.frame?.parentFrame()) {
-    const element = await state.frame.frameElement();
-    try {
-      await element.evaluate((node) => (node as Element).scrollIntoView({ block: "center", inline: "center", behavior: "instant" }));
-    } finally { await element.dispose(); }
-    state.frame = state.frame.parentFrame();
-  }
-}
 
 async function receivesPoint(target: ElementHandle, point: Point) {
   const box = await target.boundingBox();
@@ -73,10 +62,13 @@ async function findPreparedTarget({ target, page }: TargetOptions): Promise<Prep
 }
 
 export async function prepareTarget(options: TargetOptions): Promise<PreparedTarget> {
+  const ready = await findPreparedTarget(options);
+  if (ready) return ready;
+  const stopStream = await streamScroll(options.page, options.onScrollFrame);
+  try {
   for (const alignment of ["center", "start", "end"] as const) {
     options.signal?.throwIfAborted();
-    await centerTarget(options.target, alignment);
-    await (options.measure ?? unmeasured)("page", "Estabilizar após rolagem (100 ms)", () => options.page.waitForTimeout(100));
+    await (options.measure ?? unmeasured)("playwright", "Rolagem suave (120 ms)", () => scrollTarget(options.target, alignment));
     const prepared = await findPreparedTarget(options);
     if (prepared) return prepared;
   }
@@ -86,6 +78,7 @@ export async function prepareTarget(options: TargetOptions): Promise<PreparedTar
     return hit ? `${hit.tagName} ${hit.getAttribute("role") ?? ""} ${(hit.textContent ?? "").trim().slice(0, 150)}` : "fora da área visível";
   }).catch(() => "alvo removido");
   throw new TargetBlockedError(`Alvo encoberto ou inacessível após reposicionamento (${blocker}). A interação não foi executada.`);
+  } finally { await stopStream(); }
 }
 
 export async function targetStillReady(target: ElementHandle, prepared: PreparedTarget) {

@@ -23,9 +23,9 @@ const LOCAL: LocalRuntimeConfig = {
     import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_COLLECTOR_SCRIPT_URL ||
     'http://localhost:8889/dist/recorder.min.js',
   platformUrl: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_PLATFORM_URL || 'http://localhost:3030',
-  localAdapter: true,
+  localAdapter: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_ADAPTER === 'true',
   localDevKey: 'voidr-verification-local',
-  organizationId: 'org_verification_local',
+  organizationId: import.meta.env.VITE_VOIDR_CAPTURE_LOCAL_ADAPTER === 'true' ? 'org_verification_local' : PENDING_CAPTURE_ORGANIZATION_ID,
 };
 
 const PRODUCTION: LocalRuntimeConfig = {
@@ -167,7 +167,8 @@ export function restoreRuntime(serialized: string | null): LocalRuntimeConfig {
     const organizationId = value.organizationId;
     if (
       typeof organizationId !== 'string' ||
-      !/^org_[A-Za-z0-9_-]{1,196}$/.test(organizationId)
+      !/^org_[A-Za-z0-9_-]{1,196}$/.test(organizationId) ||
+      (!defaultRuntime.localAdapter && !/^org_[A-Za-z0-9]+$/.test(organizationId))
     ) {
       return defaultRuntime;
     }

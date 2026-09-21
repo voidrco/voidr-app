@@ -1,11 +1,18 @@
 const categories = {
-  jev: { name: "Jev · API", color: "#b9a2e8" },
-  page: { name: "Página · espera", color: "#ddb881" },
-  playwright: { name: "Playwright", color: "#9dc8e8" },
+  jev: { name: "Análise da jornada", color: "#b9a2e8" },
+  page: { name: "Carregamento da página", color: "#ddb881" },
+  playwright: { name: "Interações no navegador", color: "#9dc8e8" },
   capture: { name: "Capturas", color: "#82bca5" },
   pacing: { name: "Pausas visuais", color: "#cf9fae" },
-  engine: { name: "Engine", color: "#8b969f" },
+  engine: { name: "Preparação e encerramento", color: "#8b969f" },
 };
+const operationLabel = label => label
+  .replace("Ler DOM e controles", "Ler conteúdo da página")
+  .replace("Abrir URL até DOM pronto", "Abrir página")
+  .replace("Assert: conferir evidência no DOM", "Conferir resultado na página")
+  .replace("Iniciar Chromium", "Abrir navegador")
+  .replace("Criar contexto do navegador", "Preparar sessão")
+  .replace("Salvar trace", "Salvar registro da execução");
 const duration = ms => ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 const spanDuration = (span, now) => span.durationMs ?? Math.max(0, now - span.startMs);
 
@@ -53,7 +60,7 @@ export class LatencyView {
   step(index) {
     this.state.stepIndex = index;
     const option = this.elements.select.querySelector('[value="current"]');
-    if (option) option.textContent = `Passo atual (${index + 1})`;
+    if (option) option.textContent = index === null ? "Preparação e encerramento" : `Passo atual (${index + 1})`;
     this.render();
   }
 
@@ -90,7 +97,7 @@ export class LatencyView {
     const spans = exclusiveSpans([...this.state.spans.values()], now);
     const selected = this.selected(spans), total = selected.reduce((sum, span) => sum + span.selfMs, 0);
     const active = spans.filter(span => span.status === "running").at(-1);
-    this.elements.current.textContent = active ? `${categories[active.category].name}: ${active.label} · ${duration(spanDuration(active, now))}` : this.state.finished ? "Execução encerrada" : "Aguardando medições";
+    this.elements.current.textContent = active ? `${categories[active.category].name}: ${operationLabel(active.label)} · ${duration(spanDuration(active, now))}` : this.state.finished ? "Execução encerrada" : "Aguardando medições";
     this.elements.total.textContent = `${duration(total)} medidos`;
     const unmeasured = this.state.finished?.unmeasuredMs;
     this.elements.overhead.textContent = this.elements.select.value === "all" && unmeasured !== undefined ? `${duration(unmeasured)} fora das medições` : "Tempos exclusivos, sem somar operações dentro de outras duas vezes.";
@@ -114,7 +121,7 @@ export class LatencyView {
   renderOperations(operations) {
     this.elements.rows.replaceChildren(...operations.map(operation => {
       const row = document.createElement("tr"); row.dataset.running = String(operation.running);
-      const label = document.createElement("td"); label.textContent = operation.label;
+      const label = document.createElement("td"); label.textContent = operationLabel(operation.label);
       label.title = `${categories[operation.category].name} · Tempo próprio; suboperações aparecem separadamente.`;
       const calls = document.createElement("td"); calls.textContent = String(operation.calls);
       const time = document.createElement("td"); time.textContent = `${duration(operation.total)}${operation.running ? " …" : ""}`;

@@ -1,6 +1,7 @@
 export type JourneyConfig = {
   url: string;
   steps: string[];
+  stepKinds?: ("action" | "assertion")[];
   expected: string[];
   headed: boolean;
   maxActions: number;
@@ -31,5 +32,8 @@ export function validateConfig(input: unknown): JourneyConfig {
   if (!Number.isInteger(maxActions) || maxActions < 1 || maxActions > 150) {
     throw new Error("O limite deve estar entre 1 e 150 decisões.");
   }
-  return { url: url.href, steps, expected, headed: raw.headed === true, maxActions };
+  const stepKinds = raw.stepKinds as JourneyConfig['stepKinds'];
+  if (stepKinds && (!Array.isArray(stepKinds) || stepKinds.length !== steps.length
+    || stepKinds.some(kind => !['action', 'assertion'].includes(kind)))) throw new Error('Classificação dos passos inválida.');
+  return { url: url.href, steps, stepKinds, expected, headed: raw.headed === true, maxActions };
 }

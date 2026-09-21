@@ -1,3 +1,7 @@
+import { LoopScenarioCatalogue } from './loops/ScenarioCoverage';
+import { aiCycleResult, aiTestStatus, loopTests } from "./loops/loop-tests";
+import type { AiRun } from "../shared/ai-tester";
+import { CreateLoopDialog } from "./CreateLoopDialog";
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -15,6 +19,7 @@ import {
   MonitorPlay,
   Network,
   Play,
+  Plus,
   Search,
   Smartphone,
   Terminal,
@@ -27,20 +32,18 @@ import type {
   DesktopLoopSummary,
   LocalRuntimeConfig,
 } from "@voidr/capture-contracts";
-import { Badge, Button } from "@voidr/capture-design-system";
+import { Badge, Button, VoidrMark } from "@voidr/capture-design-system";
 import { loadWorkspaceCycleDetail } from "./workspace-cycle-recovery";
 
 type WorkspaceHomeProps = {
   runtime: LocalRuntimeConfig;
   busy: boolean;
   connectionRequired: boolean;
-  organizationSelected: boolean;
-  connectionState: "disconnected" | "connecting" | "connected" | "error";
-  connectionError: string;
-  onConnectWorkspace: () => Promise<void>;
   onConnectionChange: (
     state: "disconnected" | "connecting" | "connected" | "error",
   ) => void;
+  onStartAi: (loopId: string) => Promise<void>;
+  onOpenAi: (loopId: string, runId: string) => void;
   onStartLoop: (loopId: string) => Promise<void>;
   onOpenCycle: (loopId: string, cycleId: string) => void;
 };
@@ -118,14 +121,17 @@ function ApplicationIcon({
   return <Globe2 size={15} />;
 }
 
+const isAiParticipant = (name?: string | null) => /^(AI Tester|Voidr AI)$/i.test(name?.trim() ?? '');
+const participantLabel = (name: string) => isAiParticipant(name) ? 'Voidr AI' : name;
+
 function ParticipantIdentity({ cycle }: { cycle: DesktopLoopCycleSummary }) {
-  const name = cycle.participant ?? "Participante não registrado";
+  const name = participantLabel(cycle.participant ?? "Participante não registrado");
   const initial = name.trim().charAt(0).toLocaleUpperCase() || "?";
   return (
     <span className="workspace-participant">
       <span className="workspace-participant-avatar" aria-hidden="true">
-        {initial}
-        {cycle.participantAvatarUrl && (
+        {isAiParticipant(name) ? <VoidrMark size={18} /> : initial}
+        {!isAiParticipant(name) && cycle.participantAvatarUrl && (
           <img
             src={cycle.participantAvatarUrl}
             alt=""
@@ -151,12 +157,12 @@ function LoopParticipantStack({ loop }: { loop: DesktopLoopSummary }) {
     <span
       className="workspace-people-stack"
       role="img"
-      aria-label={`Participantes: ${visible.map((participant) => participant.name).join(", ")}`}
+      aria-label={`Participantes: ${visible.map((participant) => participantLabel(participant.name)).join(", ")}`}
     >
       {visible.map((participant) => (
-        <span key={participant.id} title={participant.name}>
-          {participant.name.trim().charAt(0).toLocaleUpperCase("pt-BR") || "?"}
-          {participant.picture && (
+        <span key={participant.id} title={participantLabel(participant.name)}>
+          {isAiParticipant(participant.name) ? <VoidrMark size={18} /> : participant.name.trim().charAt(0).toLocaleUpperCase("pt-BR") || "?"}
+          {!isAiParticipant(participant.name) && participant.picture && (
             <img
               src={participant.picture}
               alt=""
@@ -227,15 +233,12 @@ export function WorkspaceHome({
   runtime,
   busy,
   connectionRequired,
-  organizationSelected,
-  connectionState,
-  connectionError,
-  onConnectWorkspace,
   onConnectionChange,
-  onStartLoop,
+  onStartLoop, onStartAi, onOpenAi,
   onOpenCycle,
 }: WorkspaceHomeProps) {
   const [loops, setLoops] = useState<DesktopLoopSummary[]>([]);
+  const [aiRuns, setAiRuns] = useState<AiRun[]>([]);
   const [cycles, setCycles] = useState<DesktopLoopCycleSummary[]>([]);
   const [detail, setDetail] = useState<DesktopLoopCycleDetail>();
   const [selectedLoopId, setSelectedLoopId] = useState("");
@@ -245,6 +248,8 @@ export function WorkspaceHome({
   const [loadingCycles, setLoadingCycles] = useState(false);
   const [error, setError] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creationNotice, setCreationNotice] = useState("");
 
   useEffect(() => {
     if (connectionRequired) {
@@ -291,37 +296,40 @@ export function WorkspaceHome({
 
   useEffect(() => {
     if (!selectedLoopId) {
+      setAiRuns([]);
       setCycles([]);
       setSelectedCycleId("");
       return;
     }
     let active = true;
-    setLoadingCycles(true);
-    void window.voidrCapture.workspace
-      .listCycles(runtime, selectedLoopId)
-      .then((values) => {
+    setCycles([]);
+    setAiRuns([]);
+    setSelectedCycleId("");
+    const load = async (quiet = false) => {
+      if (!quiet) setLoadingCycles(true);
+      try {
+        const [values, runs] = await Promise.all([
+          window.voidrCapture.workspace.listCycles(runtime, selectedLoopId),
+          window.voidrCapture.aiTester.list({ runtime, loopId: selectedLoopId }),
+        ]);
         if (!active) return;
         setCycles(values);
-        setSelectedCycleId((current) =>
-          values.some((item) => item.id === current)
-            ? current
-            : (values[0]?.id ?? ""),
-        );
-      })
-      .catch(() => {
-        if (active)
-          setError("Não foi possível atualizar os testes deste Loop.");
-      })
-      .finally(() => {
-        if (active) setLoadingCycles(false);
-      });
-    return () => {
-      active = false;
+        setAiRuns(runs);
+        const tests = loopTests(values, runs);
+        setSelectedCycleId(current => tests.some(test => test.id === current) ? current : tests[0]?.id ?? "");
+      } catch {
+        if (active) setError("Não foi possível atualizar os testes deste Loop.");
+      } finally {
+        if (active && !quiet) setLoadingCycles(false);
+      }
     };
+    void load();
+    const timer = window.setInterval(() => void load(true), 15_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [runtime, selectedLoopId, refreshVersion]);
 
   useEffect(() => {
-    if (!selectedLoopId || !selectedCycleId) {
+    if (!selectedLoopId || !selectedCycleId || selectedCycleId.startsWith("ai:")) {
       setDetail(undefined);
       return;
     }
@@ -371,8 +379,13 @@ export function WorkspaceHome({
     );
   }, [loops, query]);
   const selectedLoop = loops.find((item) => item.id === selectedLoopId);
+  const tests = loopTests(cycles, aiRuns);
+  const selectedAi = aiRuns.find(run => `ai:${run.runId}` === selectedCycleId);
   const selectedCycle = cycles.find((item) => item.id === selectedCycleId);
-  const selectedStatus = selectedCycle ? copyForStatus(selectedCycle.status) : null;
+  const selectedAiCapture = selectedCycle ? aiCycleResult(selectedCycle.id, aiRuns) : undefined;
+  const selectedStatus = selectedAiCapture?.result && selectedCycle?.artifactReady
+    ? aiTestStatus({ ...selectedAiCapture.run, status: 'completed', results: [selectedAiCapture.result], plan: undefined })
+    : selectedCycle ? copyForStatus(selectedCycle.status) : null;
   const reviewIsPrimary = Boolean(
     selectedCycle &&
       ["ready", "decision_required", "attention", "fix_proposed", "awaiting_retest"].includes(
@@ -386,61 +399,17 @@ export function WorkspaceHome({
     (item) => !["replay", "annotation", "transcript", "screenshot"].includes(item.kind),
   );
 
-  if (connectionRequired) {
-    const authenticating = connectionState === "connecting";
-    return (
-      <main className="workspace-home">
-        <section className="workspace-connect" aria-labelledby="workspace-connect-title">
-          <span className="workspace-connect-icon" aria-hidden="true">
-            {authenticating ? <Loader2 className="spin" size={20} /> : <ExternalLink size={20} />}
-          </span>
-          <div>
-            <span>Voidr Capture</span>
-            <h1 id="workspace-connect-title">
-              {organizationSelected ? "Entre no seu workspace" : "Escolha seu workspace"}
-            </h1>
-            <p>
-              {organizationSelected
-                ? "Confirme sua conta Voidr no navegador. Depois do login, este app carrega o nome, o logo e os Loops do cliente selecionado."
-                : "Abra a Voidr Web e escolha o cliente. O app recebe somente o identificador do workspace; nenhuma credencial viaja no link."}
-            </p>
-          </div>
-          <ol className="workspace-auth-steps" aria-label="Etapas da conexão">
-            <li className={organizationSelected ? "complete" : "current"}>
-              {organizationSelected ? <CheckCircle2 size={14} /> : <span>1</span>}
-              <div><strong>Workspace</strong><small>{organizationSelected ? "Selecionado na Web" : "Escolha o cliente na Web"}</small></div>
-            </li>
-            <li className={authenticating ? "current" : ""}>
-              {authenticating ? <Loader2 className="spin" size={14} /> : <span>2</span>}
-              <div><strong>Autenticação</strong><small>Conta Google da Voidr</small></div>
-            </li>
-            <li>
-              <span>3</span>
-              <div><strong>Sincronização</strong><small>Logo, usuário e Loops</small></div>
-            </li>
-          </ol>
-          {connectionError && (
-            <p className="workspace-auth-error" role="alert">{connectionError}</p>
-          )}
-          <Button
-            variant="primary"
-            size="lg"
-            icon={authenticating ? <Loader2 className="spin" size={14} /> : <ExternalLink size={14} />}
-            disabled={busy || authenticating}
-            onClick={() => void onConnectWorkspace()}
-          >
-            {organizationSelected ? "Continuar com Google" : "Escolher na Voidr Web"}
-          </Button>
-          <small className="workspace-auth-note">
-            Ambiente e endpoints são fixos nesta versão do app. Trocar de cliente não troca de ambiente.
-          </small>
-        </section>
-      </main>
-    );
-  }
 
   return (
     <main className="workspace-home">
+      {createOpen && <CreateLoopDialog runtime={runtime} onClose={() => setCreateOpen(false)} onCreated={loop => {
+        setCreateOpen(false);
+        setSelectedLoopId(loop.id);
+        setQuery("");
+        setCreationNotice(loop.reused ? "Este Loop já existe. Abrimos ele para você." : "Loop criado. Tudo pronto para testar.");
+        setRefreshVersion(value => value + 1);
+      }} />}
+      {creationNotice && <div className="workspace-creation-notice" role="status"><CheckCircle2 size={15} />{creationNotice}</div>}
       {error && (
         <div className="workspace-error" role="alert">
           <AlertCircle size={15} />
@@ -456,6 +425,7 @@ export function WorkspaceHome({
 
       <section className="workspace-surface">
         <aside className="workspace-loop-pane" aria-label="Loops disponíveis">
+          <div className="workspace-create-toolbar"><Button size="sm" variant="primary" disabled={busy || connectionRequired} onClick={() => { setCreationNotice(""); setCreateOpen(true); }}><Plus size={14} />Criar Loop</Button></div>
           <div className="workspace-search">
             <Search size={14} />
             <input
@@ -516,7 +486,7 @@ export function WorkspaceHome({
                 <span>
                   {loops.length
                     ? "Tente buscar por outro nome ou ambiente."
-                    : "Crie um Loop na interface Web e volte para iniciar o teste."}
+                    : "Crie um Loop para começar a testar com sua equipe."}
                 </span>
               </div>
             )}
@@ -543,6 +513,8 @@ export function WorkspaceHome({
                   </div>
                 </div>
                 <div className="workspace-detail-actions">
+                  {selectedLoop.applicationType === 'WEB' && <Button size="sm" variant="secondary" disabled={busy}
+                    onClick={() => void onStartAi(selectedLoop.id)}><VoidrMark size={15} />Executar com Voidr AI</Button>}
                   {selectedCycle && (
                     <Button
                       size="sm"
@@ -573,6 +545,7 @@ export function WorkspaceHome({
                 </div>
               </header>
 
+              <LoopScenarioCatalogue key={selectedLoop.id} runtime={runtime} loopId={selectedLoop.id} />
               <div className="workspace-detail-body">
                 <aside
                   className="workspace-cycle-pane"
@@ -580,16 +553,28 @@ export function WorkspaceHome({
                 >
                   <div className="workspace-section-heading">
                     <span>Testes</span>
-                    <Badge tone="neutral">{cycles.length}</Badge>
+                    <Badge tone="neutral">{Math.max(selectedLoop.testCount, tests.length)}</Badge>
                   </div>
                   <div className="workspace-cycle-list">
                     {loadingCycles ? (
                       <div className="workspace-loading">
                         <Loader2 className="spin" size={14} /> Carregando…
                       </div>
-                    ) : cycles.length ? (
-                      cycles.map((cycle) => {
-                        const status = copyForStatus(cycle.status);
+                    ) : tests.length ? (
+                      tests.map((test) => {
+                        if (test.kind === 'ai') {
+                          const status = aiTestStatus(test.run);
+                          return <button key={test.id} type="button"
+                            className={`workspace-cycle-row${test.id === selectedCycleId ? " active" : ""}`}
+                            onClick={() => setSelectedCycleId(test.id)}>
+                            <span className="workspace-cycle-number"><VoidrMark size={16} /></span>
+                            <span><strong>Voidr AI</strong><small>{relativeTime(test.at)}</small></span>
+                            <Badge tone={status.tone}>{status.label}</Badge>
+                          </button>;
+                        }
+                        const cycle = test.cycle;
+                        const ai = aiCycleResult(cycle.id, aiRuns);
+                        const status = ai?.result && cycle.artifactReady ? aiTestStatus({ ...ai.run, status: 'completed', results: [ai.result], plan: undefined }) : copyForStatus(cycle.status);
                         return (
                           <button
                             key={cycle.id}
@@ -618,16 +603,30 @@ export function WorkspaceHome({
                       </div>
                     )}
                   </div>
+
                 </aside>
 
                 <section className="workspace-evidence-pane">
-                  {selectedCycle ? (
+                  {selectedAi ? (
+                    <div className="workspace-mission">
+                      <div className="workspace-review-subject">
+                        <span className="workspace-participant-avatar"><VoidrMark size={20} /></span>
+                        <div><strong>Voidr AI</strong><small>{relativeTime(selectedAi.createdAt ?? null)}</small></div>
+                        <Badge tone={aiTestStatus(selectedAi).tone}>{aiTestStatus(selectedAi).label}</Badge>
+                      </div>
+                      {selectedAi.results.map(result => <p key={result.journeyId}>{result.reason}</p>)}
+                      <p>{selectedAi.results.length} jornada(s) · {selectedAi.artifacts.length} evidência(s)</p>
+                      <Button size="sm" variant="primary" onClick={() => onOpenAi(selectedLoop.id, selectedAi.runId)}>
+                        Ver teste e evidências
+                      </Button>
+                    </div>
+                  ) : selectedCycle ? (
                     <>
                       <div className="workspace-mission">
                         <div className="workspace-review-subject">
                           <span className="workspace-participant-avatar" aria-hidden="true">
-                            {(selectedCycle.participant ?? "?").trim().charAt(0).toLocaleUpperCase() || "?"}
-                            {selectedCycle.participantAvatarUrl && (
+                            {isAiParticipant(selectedCycle.participant) ? <VoidrMark size={20} /> : (selectedCycle.participant ?? "?").trim().charAt(0).toLocaleUpperCase() || "?"}
+                            {!isAiParticipant(selectedCycle.participant) && selectedCycle.participantAvatarUrl && (
                               <img
                                 src={selectedCycle.participantAvatarUrl}
                                 alt=""
@@ -639,7 +638,7 @@ export function WorkspaceHome({
                             )}
                           </span>
                           <div>
-                            <strong>{selectedCycle.participant ?? `Teste ${selectedCycle.number}`}</strong>
+                            <strong>{participantLabel(selectedCycle.participant ?? `Teste ${selectedCycle.number}`)}</strong>
                             <small>
                               {selectedCycle.participantRole
                                 ? `${selectedCycle.participantRole} · `
@@ -666,6 +665,14 @@ export function WorkspaceHome({
                         )}
                       </div>
 
+                      {selectedAiCapture && <div className="workspace-mission">
+                        {selectedAiCapture.result && <p>{selectedAiCapture.result.reason}</p>}
+                        {selectedAiCapture.run.artifacts.filter(artifact => artifact.journeyId === selectedAiCapture.journeyId && artifact.uploaded).map(artifact =>
+                          <Button key={artifact.id} size="sm" onClick={() => void window.voidrCapture.aiTester.artifact({ runtime, loopId: selectedLoop.id, runId: selectedAiCapture.run.runId, artifactId: artifact.id })}>
+                            {artifact.name.endsWith('.webm') ? 'Vídeo da execução' : artifact.name === 'trace.zip' ? 'Trace Playwright' : artifact.name}
+                          </Button>)}
+                        <Button size="sm" onClick={() => onOpenAi(selectedLoop.id, selectedAiCapture.run.runId)}>Passos e verificações</Button>
+                      </div>}
                       <div className="workspace-evidence-header">
                         <div>
                           <span>Feedback e evidências</span>

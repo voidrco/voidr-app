@@ -1,4 +1,7 @@
-import { journeyStateSchema, type JourneyConfig, type JourneyState } from '../shared/journeys';
+import { aiScenarioSchema, aiRunSchema, aiStateSchema, type AiRequest, type AiState } from "../shared/ai-tester";
+import { aiLaunchEventSchema, pendingAiLaunchesSchema, type AiLaunchEvent } from '../shared/ai-launch';
+import { loopApplicationSchema, loopEnvironmentSchema, createdLoopSchema, type CreateLoopInput } from '../shared/loop-creation';
+import { journeyStateSchema, type JourneyConfig, type JourneyState, type JourneyInput } from '../shared/journeys';
 import { contextBridge, ipcRenderer } from 'electron';
 import { z } from 'zod';
 import { updateStateSchema, type UpdateState } from '../shared/update';
@@ -75,7 +78,48 @@ export interface CaptureLaunchAcceptance {
 }
 
 const api = {
+  aiTester: {
+    pendingLaunches: (runtime: LocalRuntimeConfig): Promise<Array<{ loopId: string; runId: string }>> => ipcRenderer.invoke('ai-tester:pending-launches', runtime)
+      .then(value => pendingAiLaunchesSchema.parse(value)),
+    watchLaunches: (runtime: LocalRuntimeConfig, callback: (event: AiLaunchEvent) => void): Unsubscribe => {
+      const subscriptionId = crypto.randomUUID();
+      const state = { active: true };
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = z.object({ subscriptionId: z.string(), event: aiLaunchEventSchema }).safeParse(value);
+        if (state.active && parsed.success && parsed.data.subscriptionId === subscriptionId) callback(parsed.data.event);
+      };
+      ipcRenderer.on('ai-tester:launch-event', listener);
+      void ipcRenderer.invoke('ai-tester:subscribe-launches', { subscriptionId, runtime }).catch(() => {
+        if (state.active) callback({ type: 'disconnected' });
+      });
+      return () => {
+        state.active = false;
+        ipcRenderer.removeListener('ai-tester:launch-event', listener);
+        void ipcRenderer.invoke('ai-tester:unsubscribe-launches', subscriptionId).catch(() => undefined);
+      };
+    },
+    clear: (): Promise<AiState> => ipcRenderer.invoke("ai-tester:clear").then(value => aiStateSchema.parse(value)),
+    status: (): Promise<AiState> => ipcRenderer.invoke('ai-tester:status').then(value => aiStateSchema.parse(value)),
+    start: (input: AiRequest): Promise<AiState> => ipcRenderer.invoke('ai-tester:start', input).then(value => aiStateSchema.parse(value)),
+    view: (input: AiRequest): Promise<AiState> => ipcRenderer.invoke('ai-tester:view', input).then(value => aiStateSchema.parse(value)),
+    scenarios: (input: AiRequest) => ipcRenderer.invoke('ai-tester:scenarios', input).then(value => z.array(aiScenarioSchema).parse(value)),
+    preparation: (input: AiRequest) => ipcRenderer.invoke('ai-tester:preparation', input).then(value => aiRunSchema.nullable().parse(value)),
+    list: (input: AiRequest) => ipcRenderer.invoke('ai-tester:list', input).then(value => z.array(aiRunSchema).parse(value)),
+    retry: (input: AiRequest): Promise<AiState> => ipcRenderer.invoke('ai-tester:retry', input).then(value => aiStateSchema.parse(value)),
+    cancel: (): Promise<AiState> => ipcRenderer.invoke('ai-tester:cancel').then(value => aiStateSchema.parse(value)),
+    resume: (): Promise<AiState> => ipcRenderer.invoke('ai-tester:resume').then(value => aiStateSchema.parse(value)),
+    artifact: (input: AiRequest & { artifactId: string }): Promise<void> => ipcRenderer.invoke('ai-tester:artifact', input),
+    onChange: (callback: (state: AiState) => void): Unsubscribe => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const parsed = aiStateSchema.safeParse(value); if (parsed.success) callback(parsed.data);
+      };
+      ipcRenderer.on('ai-tester:changed', listener);
+      return () => ipcRenderer.removeListener('ai-tester:changed', listener);
+    },
+  },
   journeys: {
+    input: (input: JourneyInput): Promise<void> => ipcRenderer.invoke('journeys:input', input),
+    resume: (): Promise<void> => ipcRenderer.invoke('journeys:resume'),
     status: (): Promise<JourneyState> => ipcRenderer.invoke("journeys:status").then(value => journeyStateSchema.parse(value)),
     configure: (): Promise<JourneyState> => ipcRenderer.invoke("journeys:configure").then(value => journeyStateSchema.parse(value)),
     start: (config: JourneyConfig): Promise<JourneyState> => ipcRenderer.invoke("journeys:start", config).then(value => journeyStateSchema.parse(value)),
@@ -203,6 +247,10 @@ const api = {
   doctor: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:doctor', runtime),
   installUpdate: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('capture:install-update', runtime),
   workspace: {
+    applications: (runtime: LocalRuntimeConfig) => ipcRenderer.invoke('workspace:applications', runtime).then(value => z.array(loopApplicationSchema).parse(value)),
+    environments: (runtime: LocalRuntimeConfig, applicationId: string) => ipcRenderer.invoke('workspace:environments', { runtime, applicationId }).then(value => z.array(loopEnvironmentSchema).parse(value)),
+    createLoop: (runtime: LocalRuntimeConfig, input: CreateLoopInput) => ipcRenderer.invoke('workspace:create-loop', { runtime, input }).then(value => createdLoopSchema.parse(value)),
+    openEnvironments: (runtime: LocalRuntimeConfig, applicationId: string): Promise<void> => ipcRenderer.invoke('workspace:open-environments', { runtime, applicationId }),
     pendingLink: (): Promise<DesktopWorkspaceLink | null> =>
       ipcRenderer.invoke('workspace:pending-link').then((value) =>
         value == null ? null : desktopWorkspaceLinkSchema.parse(value),

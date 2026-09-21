@@ -1,3 +1,5 @@
+import { withoutSelectorReferences } from "./control-references.js";
+
 const DOCUMENT = /\b(?:\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})\b/g;
 const NUMBER = /\b\d+(?:[.,]\d+)*(?:\s*(?:milhões|milhão|mil))?\b/gi;
 
@@ -10,7 +12,7 @@ export function normalizeNumber(value: string) {
 }
 
 export function extractValues(instruction: string) {
-  const journey = instruction.replace(/^\s*\d+[.)]\s*/, "");
+  const journey = withoutSelectorReferences(instruction).replace(/^\s*\d+[.)]\s*/, "");
   const documents = journey.match(DOCUMENT) ?? [];
   const numbers = (journey.replace(DOCUMENT, "").match(NUMBER) ?? []).map(normalizeNumber);
   const quoted = [...journey.matchAll(/["“]([^"”]+)["”]|'([^']+)'/g)].map((match) => match[1] ?? match[2] ?? "");
@@ -19,4 +21,11 @@ export function extractValues(instruction: string) {
     .map((match) => match[1]!.replace(/[.!]$/, "").trim());
   return [...new Set([...quoted, ...documents, ...emails, ...numbers, ...assignments])]
     .filter((value) => value.length > 0 && value.length <= 1_000).slice(0, 20);
+}
+
+export function assertionTerms(instruction: string) {
+  const condition = withoutSelectorReferences(instruction);
+  const quoted = [...condition.matchAll(/["“”]([^"“”]+)["“”]|'([^']+)'/g)].map(match => match[1] ?? match[2] ?? "");
+  const numbers = condition.replace(/^\s*\d+[.)]\s*/, "").match(NUMBER) ?? [];
+  return [...new Set([...quoted, ...numbers.map(normalizeNumber)])];
 }

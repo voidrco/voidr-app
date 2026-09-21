@@ -1,3 +1,4 @@
+import { resolveSecret } from "./runtime-secrets.js";
 import type { ElementHandle, Page } from "playwright-core";
 import { CONTROL_SELECTOR, observe, type Control, type Observation } from "./browser.js";
 import { prepareTarget, targetStillReady, type PreparedTarget } from "./target.js";
@@ -6,15 +7,16 @@ import { unmeasured, type Measure } from "./timing.js";
 type ActionKind = "click" | "fill" | "select" | "check" | "uncheck" | "enter";
 export type Action = { id: string; kind: ActionKind; control: Control; value?: string };
 export type Interaction = {
-  phase: "target" | "acting" | "typing" | "settled";
-  kind: ActionKind; label: string;
+  phase: "target" | "acting" | "typing" | "settled" | "scrolling" | "checking" | "passed" | "failed";
+  kind: ActionKind | "assert" | "scroll"; label: string;
   target?: { x: number; y: number; width: number; height: number };
   point?: { x: number; y: number };
   viewport: { width: number; height: number };
 };
 type Execution = {
   page: Page; observation: Observation; action: Action; signal?: AbortSignal;
-  onInteraction?: (interaction: Interaction) => Promise<void>;
+  secrets?: Record<string, string>; credentialOrigin?: string;
+  onInteraction?: (interaction: Interaction, screenshot?: string) => Promise<void>;
   measure?: Measure;
 };
 const FORBIDDEN = /desembols|\bpix\b|transferir|efetuar pagamento|pay now|place order|confirm purchase/i;
@@ -39,7 +41,8 @@ function controlActions(control: Control, values: string[]): Omit<Action, "id">[
   if (control.type === "radio") return control.checked ? [] : [{ kind: "check", control }];
   if ((["input", "textarea"].includes(control.tag) || control.editable) && !["submit", "button", "reset"].includes(control.type)) {
     const fills: Omit<Action, "id">[] = fillValues(control, values).map((value) => ({ kind: "fill", control, value }));
-    return control.tag === "input" && control.value ? [...fills, { kind: "enter", control }] : fills;
+    const actions: Omit<Action, "id">[] = [{ kind: "click", control }, ...fills];
+    return control.tag === "input" && control.value ? [...actions, { kind: "enter", control }] : actions;
   }
   return [{ kind: "click", control }];
 }
@@ -56,7 +59,9 @@ export function describeAction(action: Action) {
   const selected = action.control.options.find((option) => option.value === action.value);
   const value = selected?.label ?? action.value;
   const context = action.control.context ? ` within ${JSON.stringify(action.control.context)}` : "";
-  return `${action.kind} ${JSON.stringify(action.control.name)}${context}${value === undefined ? "" : ` = ${JSON.stringify(value)}`}`;
+  const target = JSON.stringify({ frame: action.control.frame, index: action.control.index,
+    section: action.control.section, selectors: action.control.selectors, matchedSelectors: action.control.matchedSelectors });
+  return `${action.kind} ${JSON.stringify(action.control.name)}${context}${value === undefined ? "" : ` = ${JSON.stringify(value)}`} target=${target}`;
 }
 
 export function actionLabel(action: Action) {
@@ -76,6 +81,11 @@ async function fillControl(target: ElementHandle, deps: Execution) {
 
 async function fillText(target: ElementHandle, deps: Execution) {
   const { action, onInteraction } = deps;
+  if (action.value?.includes('{{env.')) {
+    if (deps.credentialOrigin && new URL(deps.page.url()).origin !== deps.credentialOrigin) throw new Error('O login em outro domínio exige intervenção manual.');
+    await target.evaluate(element => (element as HTMLElement).style.setProperty('-webkit-text-security', 'disc', 'important'));
+    return target.fill(resolveSecret(action.value, deps.secrets));
+  }
   const typeable = ["text", "email", "search", "tel", "url", "textarea", ""].includes(action.control.type) || action.control.editable;
   if (!onInteraction || !typeable || action.value!.length > 200) return target.fill(action.value!);
   await target.fill("");
@@ -106,7 +116,7 @@ export function visibleCenter(box: NonNullable<Interaction["target"]>, viewport:
 
 async function matchesObservation(deps: Execution) {
   const { page, observation, action } = deps;
-  const fresh = await observe(page);
+  const fresh = await observe(page, action.control.matchedSelectors ?? []);
   const current = fresh.controls.find((control) => control.index === action.control.index && control.frame === action.control.frame);
   const stable = (control: Control | undefined) => control && { ...control, availability: undefined };
   return fresh.url === observation.url && current?.availability !== "blocked_by_modal"
@@ -133,7 +143,9 @@ export async function executeAction(deps: Execution) {
   if (!target) return false;
   try {
     if (!await target.isVisible() || !await target.isEnabled()) return false;
-    const prepared = await measure("playwright", "Posicionar alvo e verificar obstruções", () => prepareTarget({ target, page, signal: deps.signal, measure }));
+    const prepared = await measure("playwright", "Posicionar alvo e verificar obstruções", () => prepareTarget({ target, page, signal: deps.signal, measure,
+      onScrollFrame: deps.onInteraction ? screenshot => { void deps.onInteraction!({ phase: "scrolling", kind: "scroll", label: `Rolando para ${action.control.name}`,
+        viewport: page.viewportSize() ?? { width: 1280, height: 900 } }, screenshot).catch(() => undefined); } : undefined }));
     await measure("playwright", "Mover mouse", () => page.mouse.move(prepared.point.x, prepared.point.y, { steps: 12 }));
     await reportInteraction({ target, deps, phase: "target", prepared });
     deps.signal?.throwIfAborted();
