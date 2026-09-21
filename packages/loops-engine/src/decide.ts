@@ -70,13 +70,13 @@ function questions(actions: Action[], observation: Observation, stepKind?: "acti
 
 export function modelObservation(observation: Observation) {
   return {
-    url: observation.url, title: observation.title, readyState: observation.readyState, text: observation.text,
+    url: observation.url, title: observation.title ?? null, readyState: observation.readyState ?? null, text: observation.text,
     activeModals: observation.activeModals ?? [],
     controls: observation.controls.map(control => ({
       frame: control.frame, index: control.index, name: control.name,
-      visibleText: control.visibleText, ariaLabel: control.ariaLabel, placeholder: control.placeholder, section: control.section,
-      domId: control.domId, selectors: control.selectors, matchedSelectors: control.matchedSelectors,
-      expanded: control.expanded, controlsId: control.controlsId, required: control.required,
+      visibleText: control.visibleText ?? null, ariaLabel: control.ariaLabel ?? null, placeholder: control.placeholder ?? null, section: control.section ?? null,
+      domId: control.domId ?? null, selectors: control.selectors ?? [], matchedSelectors: control.matchedSelectors ?? [],
+      expanded: control.expanded ?? null, controlsId: control.controlsId ?? null, required: control.required ?? null,
       options: control.options.slice(0, 30), min: control.min, max: control.max, step: control.step,
       type: control.type || control.tag, value: control.verifiedValue ?? control.value, verifiedValue: control.verifiedValue ?? null, checked: control.checked, focused: Boolean(control.focused),
       context: control.context, availability: control.availability ?? "ready",
