@@ -18,15 +18,14 @@ export function readEvidence(nodes: Element[] | Element) {
           value: input.value, ...(['checkbox', 'radio'].includes(input.type) ? { checked: input.checked } : {}) };
       });
     return text || values.length ? { text, values } : null;
-  } };
-  const elements = Array.isArray(nodes) ? nodes : [nodes];
-  const indexes = new Map(elements.map((node, index) => [node, index]));
-  const ancestors = (node: Element): number[] => {
+  }, ancestors(node: Element): number[] {
     const parent = node.parentElement;
     if (!parent) return [];
     const index = indexes.get(parent);
-    return [...(index === undefined ? [] : [index]), ...ancestors(parent)];
-  };
+    return [...(index === undefined ? [] : [index]), ...helpers.ancestors(parent)];
+  } };
+  const elements = Array.isArray(nodes) ? nodes : [nodes];
+  const indexes = new Map(elements.map((node, index) => [node, index]));
   const seen = new Set<string>();
   return elements.map((node, index) => ({ node, index }))
     .sort((a, b) => Number(a.node.tagName === 'BODY') - Number(b.node.tagName === 'BODY'))
@@ -36,7 +35,7 @@ export function readEvidence(nodes: Element[] | Element) {
     const fingerprint = JSON.stringify(value);
     if (seen.has(fingerprint)) return [];
     seen.add(fingerprint);
-    return [{ ...value, index, ancestorIndexes: ancestors(node) }];
+    return [{ ...value, index, ancestorIndexes: helpers.ancestors(node) }];
   }).slice(0, 100);
 }
 
