@@ -53,8 +53,9 @@ export class LoopsController {
   get running() {
     return this.reserved || this.state.running || Boolean(this.worker);
   }
-  reserve() {
+  async reserve() {
     if (this.running || this.deps.captureBusy()) throw new Error('Já existe uma captura ou jornada em execução.');
+    if (!this.state.configured) await this.configure();
     if (!this.state.configured) throw new Error('Configure o acesso do Voidr AI em Voidr AI.');
     this.reserved = true;
   }
