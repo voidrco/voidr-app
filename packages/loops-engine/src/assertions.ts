@@ -25,11 +25,12 @@ type AssertionOptions = {
   attempt?: number; cache?: Map<string, ConditionResult>;
   redact?: <T>(value: T) => T;
   onUsage?: (tokens: { input_tokens: number; output_tokens: number }) => void;
+  client?: ReturnType<typeof createTypeSafeClient>;
   onInteraction?: (interaction: Interaction, screenshot?: string) => Promise<void>;
 };
 
 async function inspect(deps: AssertionOptions, result: AssertionResult) {
-  const client = createTypeSafeClient();
+  const client = deps.client ?? createTypeSafeClient();
   const revision = await pageFingerprint(deps.page).catch(() => undefined);
   const verification = deps.verification ?? legacyVerification(deps.instruction);
   result.verification = verification;

@@ -11,6 +11,7 @@ import { actionLabel, buildActions, describeAction, executeAction, type Action, 
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
 import { createDecider, modelObservation } from "./decide.js";
+import type { createTypeSafeClient } from "./client.js";
 import { extractValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
 import { TargetBlockedError } from "./target.js";
@@ -38,7 +39,8 @@ export type RunResult = {
 type EngineOptions = { secrets?: Record<string, string>; onIntervention?: (page: () => Page) => Promise<void>; config: JourneyConfig; outputRoot: string; signal?: AbortSignal; visual?: boolean;
   evidenceSecrets?: Record<string, string>; traceExcludeOrigins?: string[];
   captureSession?: { setup: (context: BrowserContext) => Promise<void>; ready: (page: Page) => Promise<void>; finish: (output: string) => Promise<void> };
-  onEvent?: (event: EngineEvent) => void; decide?: ReturnType<typeof createDecider> };
+  onEvent?: (event: EngineEvent) => void; decide?: ReturnType<typeof createDecider>;
+  verificationClient?: ReturnType<typeof createTypeSafeClient> };
 type Runtime = {
   page: Page; options: EngineOptions; decide: ReturnType<typeof createDecider>;
   stepIndex: number; history: string[]; records: Record<string, unknown>[]; actions: number;
@@ -164,6 +166,7 @@ async function checkAssertion(runtime: Runtime, observation: Observation, probab
     instruction: runtime.options.config.steps[runtime.stepIndex]!, probability, confidence: 0,
     verification: runtime.options.config.verifications?.[runtime.stepIndex] ?? undefined,
     secrets: runtime.options.secrets, observedActions: runtime.observedActions, attempt, cache: runtime.assertionCache,
+    client: runtime.options.verificationClient,
     redact: secretRedactor(runtime.options.secrets).redact,
     onUsage: tokens => { runtime.inputTokens += tokens.input_tokens; runtime.outputTokens += tokens.output_tokens; },
     signal: runtime.options.signal, measure: runtime.timing.measure,
