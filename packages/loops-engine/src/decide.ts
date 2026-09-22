@@ -31,7 +31,7 @@ function questions(actions: Action[], observation: Observation, stepKind?: "acti
   return {
     needsHuman: noul({ task: 'Does the page require additional human authentication (MFA, one-time code, CAPTCHA, security key, account approval) before the CURRENT step can continue?', criteria: 'Yes only for a visible authentication challenge the available actions and supplied data cannot complete. Ordinary errors, missing product data and failed assertions are not authentication challenges.' }),
     assertionPredicate: choice("For the verification in currentStep, how should the explicit quoted names/text and numeric values in assertionTerms be checked?", {
-      contains: "The requested entities and exact values must appear together in the evidence (e.g. Blue Top with quantity 3). Use this for explicit positive equality/presence checks.",
+      contains: "The requested entities and exact values must appear together in the evidence (e.g. Plan Pro with 2 users). Use this for explicit positive equality/presence checks.",
       absent: "The explicitly quoted text or entity must be absent from the results. Only choose for an explicit absence instruction, never for inequality or a changed quantity.",
       semantic: "The condition has no exact literal expectation, requires meaning/translation, or involves an inequality or relation not expressible by literal presence.",
     }),
