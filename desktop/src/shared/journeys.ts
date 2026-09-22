@@ -1,3 +1,4 @@
+import { verificationSchema, conditionResultSchema } from '@voidr/capture-contracts';
 import { z } from "zod";
 
 export const journeyConfigSchema = z
@@ -15,6 +16,7 @@ export const journeyConfigSchema = z
         );
       }, "Use uma URL HTTP ou HTTPS sem credenciais."),
     steps: z.array(z.string().trim().min(1).max(2000)).min(1).max(40),
+    verifications: z.array(verificationSchema.nullable()).max(40).optional(),
     stepKinds: z.array(z.enum(["action", "assertion"])).optional(),
     expected: z.array(z.string().trim().min(1).max(1000)).max(20),
     headed: z.boolean(),
@@ -44,6 +46,7 @@ const evidenceSnapshotSchema = z.object({ text: z.string(), values: z.array(z.ob
 export const journeyAssertionSchema = z.object({
   stepIndex: z.number(), instruction: z.string(), status: z.enum(["passed", "failed", "unverified"]),
   method: z.literal("semantic+dom"), probability: z.number(), reason: z.string(), durationMs: z.number(),
+  verification: verificationSchema.optional(), conditions: z.array(conditionResultSchema).optional(),
   predicate: z.string(), terms: z.array(z.string()), url: z.string(),
   expected: evidenceSnapshotSchema.optional(), actual: evidenceSnapshotSchema.optional(),
   screenshot: z.string().startsWith("data:image/").optional(), interaction: journeyInteractionSchema.optional(),

@@ -22,10 +22,3 @@ export function extractValues(instruction: string) {
   return [...new Set([...quoted, ...documents, ...emails, ...numbers, ...assignments])]
     .filter((value) => value.length > 0 && value.length <= 1_000).slice(0, 20);
 }
-
-export function assertionTerms(instruction: string) {
-  const condition = withoutSelectorReferences(instruction);
-  const quoted = [...condition.matchAll(/["“”]([^"“”]+)["“”]|'([^']+)'/g)].map(match => match[1] ?? match[2] ?? "");
-  const numbers = condition.replace(/^\s*\d+[.)]\s*/, "").match(NUMBER) ?? [];
-  return [...new Set([...quoted, ...numbers.map(normalizeNumber)])];
-}

@@ -1,7 +1,10 @@
+import { verificationSchema, type VerificationPlan } from '@voidr/capture-contracts';
+
 export type JourneyConfig = {
   url: string;
   steps: string[];
   stepKinds?: ("action" | "assertion")[];
+  verifications?: (VerificationPlan | null)[];
   expected: string[];
   headed: boolean;
   maxActions: number;
@@ -35,5 +38,9 @@ export function validateConfig(input: unknown): JourneyConfig {
   const stepKinds = raw.stepKinds as JourneyConfig['stepKinds'];
   if (stepKinds && (!Array.isArray(stepKinds) || stepKinds.length !== steps.length
     || stepKinds.some(kind => !['action', 'assertion'].includes(kind)))) throw new Error('Classificação dos passos inválida.');
-  return { url: url.href, steps, stepKinds, expected, headed: raw.headed === true, maxActions };
+  const verifications = raw.verifications === undefined ? undefined : verificationSchema.nullable().array().max(40).parse(raw.verifications);
+  if (verifications && (verifications.length !== steps.length || verifications.some((plan, index) => plan && stepKinds?.[index] === 'action'))) {
+    throw new Error('Condições devem corresponder aos passos de verificação.');
+  }
+  return { url: url.href, steps, stepKinds, verifications, expected, headed: raw.headed === true, maxActions };
 }

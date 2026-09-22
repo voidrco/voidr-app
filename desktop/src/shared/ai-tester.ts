@@ -1,3 +1,4 @@
+import { verificationSchema, conditionSummarySchema } from '@voidr/capture-contracts';
 import { z } from 'zod';
 
 export const aiScenarioSchema = z.object({ id: z.string(), version: z.string(), title: z.string(), objective: z.string(),
@@ -8,10 +9,10 @@ export type AiScenario = z.infer<typeof aiScenarioSchema>;
 
 export const aiJourneySchema = z.object({ id: z.string(), scenarioId: z.string().optional(), scenarioVersion: z.string().optional(), objective: z.string(), prerequisites: z.array(z.string()),
   data: z.array(z.string()), blockers: z.array(z.string()), sources: z.array(z.string()),
-  steps: z.array(z.object({ kind: z.enum(['action', 'assertion']), instruction: z.string(), sources: z.array(z.string()) })) });
+  steps: z.array(z.object({ kind: z.enum(['action', 'assertion']), instruction: z.string(), verification: verificationSchema.optional(), sources: z.array(z.string()) })) });
 export const aiResultSchema = z.object({ journeyId: z.string(), outcome: z.enum(['passed', 'divergence', 'unable_to_verify', 'cancelled', 'blocked']),
   reason: z.string(), completedSteps: z.number(), durationMs: z.number(),
-  assertions: z.array(z.object({ stepIndex: z.number(), status: z.enum(['passed', 'failed', 'unverified']), reason: z.string() })) });
+  assertions: z.array(z.object({ stepIndex: z.number(), status: z.enum(['passed', 'failed', 'unverified']), reason: z.string(), conditions: z.array(conditionSummarySchema).optional() })) });
 export const aiArtifactSchema = z.object({ id: z.string(), journeyId: z.string(), name: z.string(), contentType: z.string(), size: z.number(), uploaded: z.boolean() });
 export const aiRunSchema = z.object({ runId: z.string().uuid(), loopId: z.string(), status: z.string(), targetUrl: z.string(), environment: z.string(),
   captureCycles: z.array(z.object({ journeyId: z.string(), cycleId: z.string() })).default([]),

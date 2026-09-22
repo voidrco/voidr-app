@@ -4,8 +4,6 @@ import type { Observation } from "./browser.js";
 import { createTypeSafeClient } from "./client.js";
 import { unmeasured, type Measure } from "./timing.js";
 import type { RecoveryFailure } from "./recovery.js";
-import { assertionTerms } from "./values.js";
-import { verifyAssertionEvidence } from "./evidence-verification.js";
 
 type DecisionInput = {
   stepKind?: "action" | "assertion";
@@ -30,11 +28,6 @@ const RULES = [
 function questions(actions: Action[], observation: Observation, stepKind?: "action" | "assertion") {
   return {
     needsHuman: noul({ task: 'Does the page require additional human authentication (MFA, one-time code, CAPTCHA, security key, account approval) before the CURRENT step can continue?', criteria: 'Yes only for a visible authentication challenge the available actions and supplied data cannot complete. Ordinary errors, missing product data and failed assertions are not authentication challenges.' }),
-    assertionPredicate: choice("For the verification in currentStep, how should the explicit quoted names/text and numeric values in assertionTerms be checked?", {
-      contains: "The requested entities and exact values must appear together in the evidence (e.g. Blue Top with quantity 3). Use this for explicit positive equality/presence checks.",
-      absent: "The explicitly quoted text or entity must be absent from the results. Only choose for an explicit absence instruction, never for inequality or a changed quantity.",
-      semantic: "The condition has no exact literal expectation, requires meaning/translation, or involves an inequality or relation not expressible by literal presence.",
-    }),
     intent: choice("Does currentStep ask to verify an observable condition? Distinguish checking a condition from clicking a button named Confirm.", {
       assertion: "Only verify a condition, presence, absence, quantity, value or result. Do not change the product to make it pass.",
       action_assertion: "Explicitly perform an interaction AND verify its outcome in this same instruction.",
@@ -108,7 +101,7 @@ export function createDecider(client = createTypeSafeClient()) {
     const started = performance.now();
     const request = {
       state: { fixedStepKind: stepKind ?? null, currentStep: steps[stepIndex]!, previousSteps: steps.slice(Math.max(0, stepIndex - 3), stepIndex),
-        page: modelObservation(observation), executedActions: history, failures, assertionTerms: stepKind === "action" ? [] : assertionTerms(steps[stepIndex]!) },
+        page: modelObservation(observation), executedActions: history, failures },
       questions: questions(actions, observation, stepKind),
     };
     const response = await measure("jev", "Decisão de status e próxima ação", () => client.systemOne(request, { signal }));
@@ -123,22 +116,16 @@ export function createDecider(client = createTypeSafeClient()) {
     const evidence = observation.evidence?.find(item => item.id === response.answers.evidence?.choice);
     const evidenceConfidence = response.answers.evidence?.confidence ?? 0;
     const checkingAssertion = intent.required && (intent.readOnly || ['step_done', 'unsure', 'blocked'].includes(answer.choice));
-    const [verification, evidenceVerification] = await Promise.all([
-      selectedAction && requiresVerification && !checkingAssertion
-        ? measure("jev", "Verificação adicional da ação", () => verifyAmbiguousAction({ client, action: selectedAction,
-          instruction: steps[stepIndex]!, observation, history, failures, signal })) : undefined,
-      checkingAssertion && evidence && evidenceConfidence < 0.5 && response.answers.needsHuman.noul < 0.8
-        ? verifyAssertionEvidence({ client, instruction: steps[stepIndex]!, previousSteps: request.state.previousSteps,
-          evidence, regions: observation.evidence ?? [], signal, measure }) : undefined,
-    ]);
-    const usage = { input_tokens: response.usage.input_tokens + (verification?.usage.input_tokens ?? 0) + (evidenceVerification?.usage.input_tokens ?? 0),
-      output_tokens: response.usage.output_tokens + (verification?.usage.output_tokens ?? 0) + (evidenceVerification?.usage.output_tokens ?? 0) };
+    const verification = selectedAction && requiresVerification && !checkingAssertion
+      ? await measure("jev", "Verificação adicional da ação", () => verifyAmbiguousAction({ client, action: selectedAction,
+        instruction: steps[stepIndex]!, observation, history, failures, signal })) : undefined;
+    const usage = { input_tokens: response.usage.input_tokens + (verification?.usage.input_tokens ?? 0),
+      output_tokens: response.usage.output_tokens + (verification?.usage.output_tokens ?? 0) };
     return { needsHuman: response.answers.needsHuman.noul >= 0.8, request, response, answer, assessment: status, completionEvidence: response.answers.satisfied,
-      assertion: { ...intent, evidence: evidenceVerification?.evidence ?? evidence,
-        predicate: response.answers.assertionPredicate?.choice ?? "semantic",
-        confidence: evidenceConfidence, evidenceSupport: evidenceVerification?.answers.sufficient.noul,
-        probability: evidenceVerification?.answers.satisfied.noul ?? response.answers.satisfied.noul },
-      evidenceVerification,
+      assertion: { ...intent, evidence,
+        predicate: "semantic",
+        confidence: evidenceConfidence,
+        probability: response.answers.satisfied.noul },
       requiresVerification, verification: verification?.answers.appropriate,
       actionVerified: (verification?.answers.appropriate.noul ?? 0) >= 0.6, usage, model: response.model,
       durationMs: Math.round(performance.now() - started) };
