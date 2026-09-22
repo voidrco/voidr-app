@@ -28,15 +28,28 @@ const deprecatedExamples = [
     ],
     expected: [],
   },
+  {
+    url: "https://example.com",
+    steps: [
+      'Confirme que o título "Example Domain" está visível.',
+      'Abra o link "More information".',
+      'Confirme que a página apresenta informações sobre domínios reservados.',
+    ],
+    expected: [],
+  },
 ];
 
 function normalizeLines(value) {
   return (Array.isArray(value) ? value.join("\n") : String(value ?? "")).trim();
 }
 
+function emptyProductUrl(example) {
+  return { ...example, url: "" };
+}
+
 export function restoreDraft(storage, example) {
   const saved = storage.getItem("voidr-loops-draft");
-  if (!saved) return example;
+  if (!saved) return emptyProductUrl(example);
   try {
     const draft = JSON.parse(saved);
     if (!draft || typeof draft !== "object") throw new Error("Invalid draft");
@@ -45,7 +58,7 @@ export function restoreDraft(storage, example) {
       && normalizeLines(draft.steps) === normalizeLines(candidate.steps)
       && normalizeLines(draft.expected) === normalizeLines(candidate.expected));
     if (!deprecated) return draft;
-    const migrated = { ...example, headed: draft.headed === true };
+    const migrated = { ...emptyProductUrl(example), headed: draft.headed === true };
     storage.setItem("voidr-loops-draft", JSON.stringify(migrated));
     return migrated;
   } catch {

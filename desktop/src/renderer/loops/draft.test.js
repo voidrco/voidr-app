@@ -2,10 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { restoreDraft } from "./draft.js";
 
 const currentExample = {
-  url: "https://example.com",
-  steps: ["Confirme que o título está visível."],
+  url: "https://seu-produto.com",
+  steps: [
+    "Acesse a tela de login.",
+    "Entre com um usuário de teste.",
+    "Abra a página de pedidos.",
+    "Confirme que a lista de pedidos está visível.",
+  ],
   expected: [],
 };
+
+const emptyProductUrlExample = { ...currentExample, url: "" };
 
 function storageWith(value) {
   return {
@@ -33,8 +40,33 @@ describe("restoreDraft", () => {
       headed: true,
     });
 
-    expect(restoreDraft(storage, currentExample)).toEqual({ ...currentExample, headed: true });
+    expect(restoreDraft(storage, currentExample)).toEqual({ ...emptyProductUrlExample, headed: true });
     expect(storage.setItem).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the previous Example Domain default", () => {
+    const storage = storageWith({
+      url: "https://example.com",
+      steps: [
+        'Confirme que o título "Example Domain" está visível.',
+        'Abra o link "More information".',
+        'Confirme que a página apresenta informações sobre domínios reservados.',
+      ],
+      expected: [],
+    });
+
+    expect(restoreDraft(storage, currentExample)).toEqual({ ...emptyProductUrlExample, headed: false });
+    expect(storage.setItem).toHaveBeenCalledOnce();
+  });
+
+  it("starts with an empty product URL and keeps the example steps", () => {
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+
+    expect(restoreDraft(storage, currentExample)).toEqual(emptyProductUrlExample);
   });
 
   it("preserves a journey created by the user", () => {

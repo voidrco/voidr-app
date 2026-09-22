@@ -1,9 +1,10 @@
 export const example = {
-  url: "https://example.com",
+  url: "https://seu-produto.com",
   steps: [
-    'Confirme que o título "Example Domain" está visível.',
-    'Abra o link "More information".',
-    'Confirme que a página apresenta informações sobre domínios reservados.',
+    "Acesse a tela de login.",
+    "Entre com um usuário de teste.",
+    "Abra a página de pedidos.",
+    "Confirme que a lista de pedidos está visível.",
   ],
   expected: [],
 };
