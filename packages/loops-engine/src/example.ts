@@ -1,14 +1,10 @@
 export const example = {
-  url: "https://automationexercise.com/products",
+  url: "https://seu-produto.com",
   steps: [
-    'Busque pelo produto "Blue Top".',
-    'Abra os detalhes do produto "Blue Top".',
-    "Preencha a quantidade com 3.",
-    "Adicione o produto ao carrinho.",
-    "Abra o carrinho.",
-    'Confirme que "Blue Top" aparece com quantidade 3.',
-    'Remova o produto "Blue Top" do carrinho.',
-    "Confirme que o carrinho está vazio.",
+    "Acesse a tela de login.",
+    "Entre com um usuário de teste.",
+    "Abra a página de pedidos.",
+    "Confirme que a lista de pedidos está visível.",
   ],
   expected: [],
 };

@@ -33,7 +33,7 @@ function updateConnection(ready) {
 
 function setRunning(running) {
   ui.running = running; onRunning(running);
-  ["url", "steps", "example", "connection", "edit-steps"].forEach((id) => { $(id).disabled = running || ui.managed; });
+  ["url", "steps", "connection", "edit-steps"].forEach((id) => { $(id).disabled = running || ui.managed; });
   $("start").disabled = running || !ui.configured || ui.managed;
   $("stop").disabled = !running;
   $("focus-stop").disabled = !running;
@@ -203,7 +203,6 @@ root.addEventListener("keydown", (event) => {
     event.preventDefault(); $("journey-form").requestSubmit();
   }
 });
-$("example").addEventListener("click", () => { fillForm(ui.example); saveDraft(); });
 async function stopRun() {
   $("stop").disabled = true; $("focus-stop").disabled = true;
   setStatus("Interrompendo…", "running");

@@ -30,6 +30,10 @@ const htmlSource = readFileSync(
   fileURLToPath(new URL("./index.html", import.meta.url)),
   "utf8",
 );
+const journeysSource = readFileSync(
+  fileURLToPath(new URL("./loops/original.html", import.meta.url)),
+  "utf8",
+);
 const designSystemSource = readFileSync(
   fileURLToPath(
     new URL(
@@ -102,6 +106,11 @@ describe("desktop experience contract", () => {
     ]) {
       expect(appSource).not.toContain(deprecatedCopy);
     }
+  });
+
+  it("does not expose the example reset action in the journey editor", () => {
+    expect(journeysSource).not.toContain("Usar exemplo");
+    expect(journeysSource).not.toContain('id="example"');
   });
 
   it("makes Loops the operational Home with real tests, participants and evidence", () => {

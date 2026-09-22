@@ -5,7 +5,7 @@ A aba **Jornadas com IA** abre a interface original da POC, com o mesmo layout, 
 ## Usar
 
 1. Abra **Jornadas com IA → Configurar conexão** e selecione um arquivo `.env` contendo `TYPESAFE_API_KEY`. `TYPESAFE_DEFAULT_MODEL` é opcional e assume `jev-latest`.
-2. Informe a URL e um passo por linha. O exemplo inicial é o fluxo de oito passos do Automation Exercise, com quantidade 3 e remoção do Blue Top.
+2. Informe a URL e um passo por linha. O exemplo inicial usa `example.com` para demonstrar navegação e verificação sem dados de cliente ou produto.
 3. Execute e acompanhe o navegador, o cursor, os passos, as recuperações e as latências. **Parar** cancela a execução.
 4. Clique em **Assert · Ver evidência** em um passo concluído para rever a região verificada. **Abrir evidências** abre a pasta local com `result.json`, `final.png`, `trace.zip` e `videos/page-N.webm` (um vídeo por aba).
 

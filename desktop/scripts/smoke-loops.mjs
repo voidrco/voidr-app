@@ -33,7 +33,7 @@ try {
     .waitFor();
   assert.equal(
     await page.locator("#url").inputValue(),
-    "https://automationexercise.com/products",
+    "https://example.com",
   );
   await page
     .getByRole("button", { name: "Executar jornada", exact: true })
@@ -64,7 +64,7 @@ try {
     }),
   );
   assert.equal(state.result?.status, "completed");
-  assert.equal(state.completedSteps, 8);
+  assert.equal(state.completedSteps, 3);
   assert.equal(state.result.assertions.length, 2);
   assert.ok(state.result.assertions.every(assertion => assertion.status === 'passed'));
   assert.ok((await stat(state.result.artifacts.videos[0])).size > 1000);
@@ -86,7 +86,7 @@ try {
   const saved = JSON.parse(
     await readFile(path.join(state.result.output, "result.json"), "utf8"),
   );
-  assert.equal(saved.completedSteps, 8);
+  assert.equal(saved.completedSteps, 3);
   await page.reload();
   await page
     .getByRole("button", { name: "Jornadas com IA", exact: true })
