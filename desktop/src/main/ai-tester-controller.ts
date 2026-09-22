@@ -21,7 +21,9 @@ const runResult = (journey: AiJourney, state: JourneyState): AiResult => ({
     : state.result?.status === 'assertion_failed' ? 'divergence' : state.result?.status === 'cancelled' ? 'cancelled' : 'unable_to_verify',
   reason: state.result?.reason || state.error || 'O executor encerrou sem um resultado verificável.',
   completedSteps: state.result?.completedSteps ?? 0, durationMs: state.result?.durationMs ?? 0,
-  assertions: (state.result?.assertions ?? []).map(({ stepIndex, status, reason }) => ({ stepIndex, status, reason })),
+  assertions: (state.result?.assertions ?? []).map(({ stepIndex, status, reason, conditions }) => ({ stepIndex, status, reason, conditions: conditions?.map(result => ({
+    id: result.condition.id, status: result.status, reason: result.reason.slice(0, 2000), evidenceFingerprint: result.evidence.fingerprint,
+  })) })),
 });
 const skipped = (journey: AiJourney, cancelled: boolean): AiResult => ({ journeyId: journey.id,
   outcome: cancelled ? 'cancelled' : 'blocked', reason: cancelled ? 'Execução cancelada antes desta jornada.' : journey.blockers.join('; ').slice(0, 2000),
@@ -179,7 +181,7 @@ export class AiTesterController {
     });
     const state = await this.deps.loops.executePlanned({
       runId: journal.run.runId,
-      config: { url: journal.run.targetUrl, steps: journey.steps.map(step => step.instruction), stepKinds: journey.steps.map(step => step.kind), expected: [], headed: false, maxActions: 100 },
+      config: { url: journal.run.targetUrl, steps: journey.steps.map(step => step.instruction), stepKinds: journey.steps.map(step => step.kind), verifications: journey.steps.map(step => step.verification ?? null), expected: [], headed: false, maxActions: 100 },
       secrets, collector: prepared.collector, outputRoot: path.join(this.root, journal.run.runId, journey.id),
       onEvent: event => { if (['step_started', 'step_done', 'intervention'].includes(event.type))
         void this.enqueue(() => this.progress(event.type === 'intervention' ? 'awaiting_intervention' : 'running', event)); },

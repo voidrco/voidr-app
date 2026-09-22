@@ -1,3 +1,6 @@
+import { pageFingerprint } from './condition-dom.js';
+import type { ConditionResult } from '@voidr/capture-contracts';
+import type { ObservedAction } from './evidence-verification.js';
 import { secretRedactor, maskSecretFields, redactTrace, credentialEvidence } from "./runtime-secrets.js";
 import { mkdir, writeFile, rm, rename } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -7,7 +10,7 @@ import { chromium, type Browser, type BrowserContext, type Page, type Video } fr
 import { actionLabel, buildActions, describeAction, executeAction, type Action, type Interaction } from "./actions.js";
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
-import { createDecider } from "./decide.js";
+import { createDecider, modelObservation } from "./decide.js";
 import { extractValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
 import { TargetBlockedError } from "./target.js";
@@ -42,6 +45,9 @@ type Runtime = {
   inputTokens: number; outputTokens: number; last?: Observation; screenshot?: Buffer;
   lastAction?: { label: string; value: string; previousText: string };
   interactions: unknown[];
+  observedActions: ObservedAction[];
+  assertionCache: Map<string, ConditionResult>;
+  assertionObservation?: string;
   assertions: AssertionResult[];
   artifacts: RunResult["artifacts"];
   timing: RunTiming;
@@ -56,6 +62,8 @@ async function capture(runtime: Runtime) {
   if (runtime.options.captureSession) await withDeadline("Inicializar Collector", 15_000, () => runtime.options.captureSession!.ready(runtime.page));
   runtime.last = await settledObservation(runtime.page, runtime.options.signal, runtime.timing.measure,
     selectorReferences(runtime.options.config.steps[runtime.stepIndex] ?? ""));
+  const pending = runtime.observedActions.at(-1);
+  if (pending && !pending.after) pending.after = observedActionState(await credentialEvidence(runtime.page, runtime.last, runtime.options.secrets));
   await captureFrame(runtime);
   return runtime.last;
 }
@@ -84,6 +92,14 @@ async function selectNext(runtime: Runtime, observation: Observation) {
   return { action, decision };
 }
 
+function observedActionState(observation: Observation) {
+  const controls = modelObservation(observation).controls;
+  return { url: observation.url, title: observation.title, text: observation.text.slice(0, 6000),
+    fields: controls.filter((_, index) => ['input', 'textarea', 'select'].includes(observation.controls[index]?.tag ?? '')).slice(0, 40)
+      .map(control => ({ frame: control.frame, index: control.index, name: control.name, value: control.value, verifiedValue: control.verifiedValue, section: control.section, context: control.context.slice(0, 300) })),
+    complete: false };
+}
+
 function actionEvidence(runtime: Runtime, observation: Observation) {
   if (!runtime.lastAction) return runtime.history;
   const before = new Set(runtime.lastAction.previousText.split("\n"));
@@ -105,7 +121,7 @@ function recover(runtime: Runtime, failure: RecoveryFailure, observation: Observ
 
 function completeStep(runtime: Runtime, confidence: number) {
   runtime.options.onEvent?.({ type: "step_done", stepIndex: runtime.stepIndex, confidence, message: runtime.options.config.steps[runtime.stepIndex] });
-  Object.assign(runtime, { stepIndex: runtime.stepIndex + 1, history: [], lastAction: undefined, recovery: new StepRecovery() });
+  Object.assign(runtime, { stepIndex: runtime.stepIndex + 1, history: [], lastAction: undefined, recovery: new StepRecovery(), assertionObservation: undefined, assertionCache: new Map() });
   return null;
 }
 
@@ -113,6 +129,9 @@ async function advance(runtime: Runtime) {
   runtime.timing.step(runtime.stepIndex);
   runtime.options.onEvent?.({ type: "step_started", stepIndex: runtime.stepIndex });
   const observation = await capture(runtime);
+  if (runtime.options.config.verifications?.[runtime.stepIndex] || runtime.options.config.stepKinds?.[runtime.stepIndex] === 'assertion') {
+    return checkAssertion(runtime, observation, 0);
+  }
   const { action, decision } = await selectNext(runtime, observation);
   assertPageOpen(runtime.page);
   const { choice: selected, confidence } = decision.answer;
@@ -122,21 +141,9 @@ async function advance(runtime: Runtime) {
     return null;
   }
   if (decision.assertion?.required && (decision.assertion.readOnly || selected === "step_done" || selected === "unsure" || selected === "blocked")) {
-    const assertion = await verifyAssertion({ page: runtime.page, stepIndex: runtime.stepIndex,
-      instruction: runtime.options.config.steps[runtime.stepIndex]!, ...decision.assertion,
-      signal: runtime.options.signal, measure: runtime.timing.measure,
-      onInteraction: runtime.options.visual ? (interaction, screenshot) => showInteraction(runtime, interaction, screenshot) : undefined });
-    runtime.assertions = [...runtime.assertions.filter(item => item.stepIndex !== runtime.stepIndex), assertion];
-    runtime.records.at(-1)!.assertion = assertion;
-    runtime.options.onEvent?.({ type: "assertion", stepIndex: runtime.stepIndex, assertion,
-      message: `${assertion.status === "passed" ? "Verificação confirmada" : assertion.status === "unverified" ? "Não foi possível verificar" : "Divergência encontrada"}: ${assertion.instruction}` });
-    if (assertion.status === "unverified") {
-      const exhausted = recover(runtime, { kind: 'uncertain', reason: assertion.reason, outcome: 'not_executed' }, observation);
-      return exhausted ? { ...exhausted, status: 'unverified' } : null;
-    }
-    if (assertion.status === "failed") return { status: "assertion_failed", reason: assertion.reason };
-    return completeStep(runtime, confidence);
+    return checkAssertion(runtime, observation, decision.assertion.probability);
   }
+
   if ((confidence < MIN_CONFIDENCE || decision.requiresVerification) && !decision.actionVerified) {
     return recover(runtime, { kind: "uncertain", reason: "A ação proposta não teve confiança suficiente.", outcome: "not_executed" }, observation, action);
   }
@@ -146,6 +153,33 @@ async function advance(runtime: Runtime) {
   return performNext({ runtime, observation, action, confidence });
 }
 
+async function checkAssertion(runtime: Runtime, observation: Observation, probability: number) {
+  const key = await pageFingerprint(runtime.page).catch(() => undefined);
+  const attempt = runtime.recovery.failures.length;
+  if (attempt > 1 && runtime.assertionObservation === key) {
+    return { status: 'unverified', reason: 'A busca ampliada não trouxe evidência nova; avaliação encerrada sem repetir o mesmo julgamento.' };
+  }
+  runtime.assertionObservation = key;
+  const assertion = await verifyAssertion({ page: runtime.page, stepIndex: runtime.stepIndex,
+    instruction: runtime.options.config.steps[runtime.stepIndex]!, probability, confidence: 0,
+    verification: runtime.options.config.verifications?.[runtime.stepIndex] ?? undefined,
+    secrets: runtime.options.secrets, observedActions: runtime.observedActions, attempt, cache: runtime.assertionCache,
+    redact: secretRedactor(runtime.options.secrets).redact,
+    onUsage: tokens => { runtime.inputTokens += tokens.input_tokens; runtime.outputTokens += tokens.output_tokens; },
+    signal: runtime.options.signal, measure: runtime.timing.measure,
+    onInteraction: runtime.options.visual ? (interaction, screenshot) => showInteraction(runtime, interaction, screenshot) : undefined });
+  runtime.assertions = [...runtime.assertions.filter(item => item.stepIndex !== runtime.stepIndex), assertion];
+  runtime.records.push({ stepIndex: runtime.stepIndex, observation, assertion, attempt });
+  runtime.options.onEvent?.({ type: 'assertion', stepIndex: runtime.stepIndex, assertion,
+    message: `${assertion.status === 'passed' ? 'Verificação confirmada' : assertion.status === 'unverified' ? 'Não foi possível verificar' : 'Divergência encontrada'}: ${assertion.instruction}` });
+  if (assertion.status === 'unverified') {
+    const exhausted = recover(runtime, { kind: 'uncertain', reason: assertion.reason, outcome: 'not_executed' }, observation);
+    return exhausted ? { ...exhausted, status: 'unverified' } : null;
+  }
+  if (assertion.status === 'failed') return { status: 'assertion_failed', reason: assertion.reason };
+  return completeStep(runtime, 1);
+}
+
 async function performNext({ runtime, observation, action, confidence }: { runtime: Runtime; observation: Observation; action: Action; confidence: number }) {
   runtime.options.signal?.throwIfAborted();
   try {
@@ -153,6 +187,8 @@ async function performNext({ runtime, observation, action, confidence }: { runti
       onInteraction: runtime.options.visual ? (interaction, screenshot) => showInteraction(runtime, interaction, screenshot) : undefined });
     runtime.records.at(-1)!.execution = executed ? "interaction_completed" : "not_executed";
     if (!executed) return recover(runtime, { kind: "stale", reason: "O alvo mudou antes da interação.", outcome: "not_executed" }, observation, action);
+    runtime.observedActions.push({ stepIndex: runtime.stepIndex, action: describeAction(action), outcome: 'completed',
+      before: observedActionState(observation), value: action.value });
     runtime.history.push(describeAction(action));
     runtime.actions += 1;
     runtime.recovery.executed(action, observation);
@@ -162,6 +198,7 @@ async function performNext({ runtime, observation, action, confidence }: { runti
   } catch (error) {
     runtime.options.signal?.throwIfAborted();
     if (runtime.page.isClosed()) throw error;
+    runtime.observedActions.push({ stepIndex: runtime.stepIndex, action: describeAction(action), outcome: 'unknown', before: observedActionState(observation) });
     const blocked = error instanceof TargetBlockedError;
     const failure: RecoveryFailure = { kind: blocked ? "blocked" : "unconfirmed", reason: safeError(error), outcome: blocked ? "not_executed" : "unknown" };
     runtime.records.at(-1)!.execution = failure;
@@ -183,7 +220,9 @@ async function showInteraction(runtime: Runtime, interaction: Interaction, frame
 
 async function navigate(runtime: Runtime) {
   runtime.options.signal?.throwIfAborted();
+  const previousUrl = runtime.page.url();
   await runtime.timing.measure("page", "Abrir URL até DOM pronto", () => runtime.page.goto(runtime.options.config.url, { waitUntil: "domcontentloaded", timeout: 30_000 }));
+  runtime.observedActions.push({ stepIndex: 0, action: `Navegar para ${runtime.options.config.url}`, outcome: 'completed', before: { url: previousUrl } });
   await captureFrame(runtime);
   for (let index = 0; index < runtime.options.config.maxActions; index += 1) {
     runtime.options.signal?.throwIfAborted();
@@ -211,7 +250,7 @@ function createResult(runtime: Runtime, output: string, started: number, termina
 async function saveResult(runtime: Runtime, result: RunResult) {
   const temporary = resolve(result.output, "result.json.tmp");
   await writeFile(temporary, JSON.stringify(secretRedactor(runtime.options.secrets).redact({ ...result,
-    config: runtime.options.config, records: runtime.records, recoveries: runtime.recoveries,
+    config: runtime.options.config, observedActions: runtime.observedActions, records: runtime.records, recoveries: runtime.recoveries,
     interactions: runtime.interactions, lifecycle: runtime.lifecycle, finalObservation: runtime.last }), null, 2), { mode: 0o600 });
   await rename(temporary, resolve(result.output, "result.json"));
   if (runtime.screenshot) await writeFile(resolve(result.output, "final.png"), runtime.screenshot);
@@ -299,7 +338,7 @@ export async function runEngine(options: EngineOptions): Promise<RunResult> {
     recordVideo: { dir: resolve(output, "videos"), size: { width: 1280, height: 900 } } })).catch(error => closeAfterSetupFailure(browser, error));
   await maskSecretFields(context, options.secrets ?? {}).catch(error => closeAfterSetupFailure(browser, error));
   const runtime: Runtime = { page: await timing.measure("engine", "Criar aba", () => context.newPage()).catch(error => closeAfterSetupFailure(browser, error)), options, decide, timing, stepIndex: 0,
-    history: [], records: [], interactions: [], assertions: [], artifacts: { videos: [], errors: [] }, actions: 0, inputTokens: 0, outputTokens: 0,
+    history: [], records: [], interactions: [], assertions: [], observedActions: [], assertionCache: new Map(), artifacts: { videos: [], errors: [] }, actions: 0, inputTokens: 0, outputTokens: 0,
     recovery: new StepRecovery(), recoveries: [], lifecycle: [] };
   const videos: Video[] = [runtime.page.video()!];
   const cancel = () => { if (!options.captureSession) void Promise.all(context.pages().map(page => page.close().catch(() => undefined))); };

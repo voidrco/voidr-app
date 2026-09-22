@@ -65,13 +65,17 @@ export async function observe(page: Page, selectors: string[] = []): Promise<Obs
   };
 }
 
+export function isBusyText(text: string) {
+  return /\b(?:consultando|calculando|resolvendo|enviando|carregando|loading|processing|submitting)\b[^\n]*(?:…|\.\.\.)/i.test(text);
+}
+
 export async function settledObservation(page: Page, signal?: AbortSignal, measure: Measure = unmeasured, selectors: string[] = []) {
   const read = () => measure("playwright", "Ler DOM e controles", () => observe(page, selectors));
   const state = { previous: "", stable: 0, latest: await read() };
   for (let attempt = 0; attempt < 24; attempt += 1) {
     signal?.throwIfAborted();
     const fingerprint = JSON.stringify(state.latest);
-    const busy = /\b(?:consultando|calculando|resolvendo|enviando|carregando|loading|processing|submitting)\b[^\n]*(?:…|\.\.\.)/i.test(state.latest.text);
+    const busy = isBusyText(state.latest.text);
     state.stable = fingerprint === state.previous && !busy ? state.stable + 1 : 0;
     if (state.stable >= 2) return state.latest;
     state.previous = fingerprint;

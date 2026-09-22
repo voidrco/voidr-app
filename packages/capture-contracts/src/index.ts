@@ -558,3 +558,5 @@ export function redactText(input: string): string {
     )
     .slice(0, 4_000);
 }
+
+export * from './verification.js';
