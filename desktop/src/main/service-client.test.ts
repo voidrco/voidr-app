@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VoidrApiError, VoidrServiceClient } from "./service-client";
+import {
+  CollectorReadinessTimeoutError,
+  VoidrApiError,
+  VoidrServiceClient,
+} from "./service-client";
 
 const runtime = {
   serviceUrl: "http://127.0.0.1:3000/v1",
@@ -81,6 +85,23 @@ describe("VoidrServiceClient", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "http://127.0.0.1:3100/sessions/session-sealed/ensure-indexed?budgetMs=1500",
     );
+  });
+
+  it("distinguishes a pending collector from a terminal processing failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: "collector-read-token" }), {
+        status: 200,
+      }),
+    );
+
+    await expect(
+      new VoidrServiceClient(runtime).waitForCollectorReadiness(
+        "session-sealed",
+        "collector-api-key",
+        4,
+        0,
+      ),
+    ).rejects.toEqual(new CollectorReadinessTimeoutError("pending"));
   });
 
   it("reads the production compatibility contract before capture starts", async () => {

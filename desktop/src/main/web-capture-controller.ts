@@ -32,6 +32,7 @@ import {
 } from './cdp-session-events';
 import { CaptureLedger } from './ledger';
 import {
+  CollectorReadinessTimeoutError,
   type SecretWebAuthorization,
   VoidrApiError,
   VoidrServiceClient,
@@ -165,6 +166,7 @@ export class WebCaptureController {
   #consoleEventDeduper = new RecentConsoleEventDeduper();
   #recentSignals: CapturedSignal[] = [];
   #readinessObserverGeneration?: string;
+  #collectorReadinessObserverGeneration?: string;
   #pendingElement?: {
     resolve: (value: SelectedElement) => void;
     reject: (error: Error) => void;
@@ -868,6 +870,7 @@ export class WebCaptureController {
     this.#consoleEventDeduper.clear();
     this.#recentSignals = [];
     this.#readinessObserverGeneration = undefined;
+    this.#collectorReadinessObserverGeneration = undefined;
     this.#startedAt = 0;
     if (this.#state.stage !== 'idle') {
       this.#state = {
@@ -1769,7 +1772,7 @@ export class WebCaptureController {
     }
   }
 
-  async #completeAfterSeal(): Promise<CaptureStatus> {
+  async #completeAfterSeal(indexedThroughOverride?: number): Promise<CaptureStatus> {
     if (!this.#authorization || !this.#client || !this.#stopReceipt) {
       throw new Error('O receipt durável não está disponível para attach.');
     }
@@ -1780,11 +1783,36 @@ export class WebCaptureController {
         this.#setState(captureReducer(this.#state, { type: 'ATTACH' }));
       }
       await this.#client.attachWebSession(this.#authorization, this.#stopReceipt.sessionId);
-      const indexedThrough = await this.#client.waitForCollectorReadiness(
-        this.#stopReceipt.sessionId,
-        this.#authorization.collectorApiKey,
-        this.#stopReceipt.sealedThrough,
-      );
+      let indexedThrough = indexedThroughOverride;
+      if (indexedThrough === undefined) {
+        try {
+          indexedThrough = await this.#client.waitForCollectorReadiness(
+            this.#stopReceipt.sessionId,
+            this.#authorization.collectorApiKey,
+            this.#stopReceipt.sealedThrough,
+          );
+        } catch (error) {
+          if (!(error instanceof CollectorReadinessTimeoutError)) throw error;
+          this.#setState(captureReducer(this.#state, { type: 'PROCESS' }));
+          await this.ledger.append({
+            type: 'web.processing',
+            generation: this.#state.generation,
+            sessionId: this.#stopReceipt.sessionId,
+            stage: 'processing',
+            data: {
+              sealedThrough: this.#stopReceipt.sealedThrough,
+              collectorStatus: error.collectorStatus,
+            },
+          });
+          this.#observeCollectorReadiness({
+            client: this.#client,
+            authorization: this.#authorization,
+            receipt: this.#stopReceipt,
+            generation: this.#state.generation,
+          });
+          return this.status;
+        }
+      }
       await this.#client.verificationIngest(this.#authorization, 'seal', {
         lifecycleVersion: this.#authorization.safeContext.lifecycleVersion,
         idempotencyKey: `desktop-seal:${this.#authorization.safeContext.verificationGeneration}:${this.#stopReceipt.sessionId}:${this.#stopReceipt.sealedThrough}`,
@@ -1795,7 +1823,9 @@ export class WebCaptureController {
           derivedSequence: indexedThrough,
         },
       });
-      this.#setState(captureReducer(this.#state, { type: 'PROCESS' }));
+      if (this.#state.stage !== 'processing') {
+        this.#setState(captureReducer(this.#state, { type: 'PROCESS' }));
+      }
       const authorization = this.#authorization;
       const client = this.#client;
       const completion = await this.#waitForCycleReady(
@@ -1845,6 +1875,36 @@ export class WebCaptureController {
       this.#fail(error, 'WEB_ATTACH_FAILED', 'attach');
       throw error;
     }
+  }
+
+  #observeCollectorReadiness(input: {
+    client: VoidrServiceClient;
+    authorization: SecretWebAuthorization;
+    receipt: CollectorStopReceipt;
+    generation?: string;
+  }): void {
+    if (!input.generation || this.#collectorReadinessObserverGeneration === input.generation) return;
+    this.#collectorReadinessObserverGeneration = input.generation;
+    void (async () => {
+      try {
+        const indexedThrough = await input.client.waitForCollectorReadiness(
+          input.receipt.sessionId,
+          input.authorization.collectorApiKey,
+          input.receipt.sealedThrough,
+          10 * 60_000,
+        );
+        if (this.#state.generation !== input.generation || this.#state.stage !== 'processing') return;
+        await this.#completeAfterSeal(indexedThrough);
+      } catch (error) {
+        if (this.#state.generation === input.generation && this.#state.stage === 'processing') {
+          this.#fail(error, 'WEB_PROCESSING_TIMEOUT', 'attach');
+        }
+      } finally {
+        if (this.#collectorReadinessObserverGeneration === input.generation) {
+          this.#collectorReadinessObserverGeneration = undefined;
+        }
+      }
+    })();
   }
 
   async #waitForCycleReady(

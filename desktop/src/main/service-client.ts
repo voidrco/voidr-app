@@ -141,6 +141,13 @@ export class VoidrApiError extends Error {
   }
 }
 
+export class CollectorReadinessTimeoutError extends Error {
+  constructor(readonly collectorStatus: string) {
+    super(`A indexação não confirmou o watermark (${collectorStatus}).`);
+    this.name = "CollectorReadinessTimeoutError";
+  }
+}
+
 function record(value: unknown): Json {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Json)
@@ -881,7 +888,7 @@ export class VoidrServiceClient {
         setTimeout(resolve, COLLECTOR_INDEX_POLL_INTERVAL_MS),
       );
     }
-    throw new Error(`A indexação não confirmou o watermark (${lastStatus}).`);
+    throw new CollectorReadinessTimeoutError(lastStatus);
   }
 
   async getVerificationStatus(verificationId: string): Promise<Json> {
