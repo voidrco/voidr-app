@@ -11,6 +11,7 @@ const mock = vi.hoisted(() => ({
   fork: vi.fn(),
   send: vi.fn(),
   sender: vi.fn(),
+  showOpenDialog: vi.fn(),
   busy: false,
 }));
 vi.mock("electron", () => ({
@@ -23,7 +24,7 @@ vi.mock("electron", () => ({
   },
   utilityProcess: { fork: (...args: unknown[]) => mock.fork(...args) },
   shell: { openPath: vi.fn() },
-  dialog: { showOpenDialog: vi.fn() },
+  dialog: { showOpenDialog: (...args: unknown[]) => mock.showOpenDialog(...args) },
 }));
 
 const config = {
@@ -54,6 +55,20 @@ async function fixture() {
   });
   await controller.initialize();
   return { controller, worker };
+}
+async function unconfiguredFixture() {
+  mock.root = await mkdtemp(path.join(tmpdir(), "loops-controller-"));
+  vi.stubEnv("VOIDR_LOOPS_ENV_FILE", "");
+  vi.stubEnv("TYPESAFE_API_KEY", "");
+  const controller = new LoopsController({
+    window: () =>
+      ({ isDestroyed: () => false, webContents: { send: mock.send } }) as never,
+    assertSender: mock.sender,
+    captureBusy: () => mock.busy,
+    directory: "/app/dist/main",
+  });
+  await controller.initialize();
+  return controller;
 }
 afterEach(async () => {
   vi.useRealTimers();
@@ -137,6 +152,27 @@ describe("journey process boundary", () => {
     mock.busy = true;
     await expect(invoke("start", config)).rejects.toThrow("Já existe");
     expect(mock.fork).not.toHaveBeenCalled();
+  });
+  it("asks for access on the first managed execution and keeps the reservation", async () => {
+    const controller = await unconfiguredFixture();
+    const accessFile = path.join(mock.root, ".env.first-run");
+    await writeFile(accessFile, "TYPESAFE_API_KEY=first-run-key");
+    mock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [accessFile] });
+
+    await controller.reserve();
+
+    expect(mock.showOpenDialog).toHaveBeenCalledOnce();
+    expect(controller.running).toBe(true);
+    expect(await invoke("status")).toMatchObject({ configured: true });
+    controller.release();
+  });
+  it("does not reserve the executor when first-run access is cancelled", async () => {
+    const controller = await unconfiguredFixture();
+    mock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+
+    await expect(controller.reserve()).rejects.toThrow("Configure o acesso");
+
+    expect(controller.running).toBe(false);
   });
   it("escalates a hung cancellation once and reports incomplete evidence", async () => {
     const { worker, controller } = await fixture();

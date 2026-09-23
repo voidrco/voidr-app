@@ -72,9 +72,9 @@ export class AiTesterController {
   async start(input: AiRequest) {
     if (this.state.busy && input.runId && input.runId === this.state.run?.runId) return this.state;
     if (this.state.busy) throw new Error('Já existe uma execução de IA em andamento.');
-    this.deps.loops.reserve();
     this.publish({ busy: true, error: undefined, run: undefined, uploadPending: false });
     try {
+      await this.deps.loops.reserve();
       const api = await this.api(input);
       const run = input.runId ? aiRunSchema.parse(await api(`/${z.string().uuid().parse(input.runId)}`)) : await this.requestRun(input, api);
       if (terminal(run.status)) {
