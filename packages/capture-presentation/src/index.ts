@@ -14,7 +14,7 @@ export const stageCopy: Record<CaptureStage, StageCopy> = {
   stopping: { title: 'Encerrando a captura', detail: 'Consolidando os últimos sinais da jornada.', tone: 'neutral' },
   sealed: { title: 'Captura preservada', detail: 'A sessão já pode ser recuperada com segurança.', tone: 'success' },
   attaching: { title: 'Organizando evidências', detail: 'Reunindo replay, requests e notas do teste.', tone: 'neutral' },
-  processing: { title: 'Preparando a entrega', detail: 'Montando o contexto citado para revisão.', tone: 'neutral' },
+  processing: { title: 'Gravação preservada', detail: 'Continuamos processando as evidências para revisão.', tone: 'neutral' },
   ready_for_review: { title: 'Teste pronto para revisar', detail: 'As evidências estão disponíveis na Voidr.', tone: 'success' },
   offline: { title: 'Sem conexão', detail: 'A captura foi preservada e retomará com segurança.', tone: 'warning' },
   recoverable_error: { title: 'Ação necessária', detail: 'Seus dados continuam preservados.', tone: 'warning' },
