@@ -28,3 +28,9 @@ Use a stable `actorId` matching the session provider and a private durable root 
 Tests cover automatic consumption, actor-scoped routing, terminal dispatch deduplication, restart into evidence-only recovery, missing model configuration and denied access. A live local authenticated MCP/REST proof confirmed default headless routing, desktop exclusion, stable request retries and cancellation removing the request. That proof did not execute the browser or use a model to request the run.
 
 A deployment supervisor, valid worker model configuration and a complete Collector/storage setup are still required. No real nstech run or deployed application revision has been validated through this worker yet.
+
+## Expected failures and assertion evidence
+
+The Loops engine distinguishes an executed interaction from a confirmed business effect. An expected rejection can complete an action only after the engine observed the interaction and new page text, and the model explicitly matches the rejection to the current instruction at the normal confirmation threshold. Unexpected rejection, missing evidence and contradictory low satisfaction remain non-passing. A model-classified assertion adds DOM verification even when the scenario labels that step as an action.
+
+The `step_done.outcome` field survives the App event boundary; `unconfirmed` is not a successful business operation. Engine decision records retain the corresponding observations. Regression tests cover contradictory model answers, missing evidence, removal-only page changes, and combined action/assertion instructions with incorrect DOM values. The final laboratory comparison used the same bundled executor with real JEV/Chromium: the original CITWEB frontend component blocked after 1/3 steps; the candidate completed 3/3 with a DOM-checked assertion. This did not deploy the application or validate the customer backend.

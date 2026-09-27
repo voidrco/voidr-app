@@ -105,6 +105,7 @@ export const journeyEventSchema = z.object({
   message: z.string().optional(),
   stepIndex: z.number().optional(),
   confidence: z.number().optional(),
+  outcome: z.enum(["confirmed", "unconfirmed"]).optional(),
   screenshot: z.string().startsWith("data:image/").optional(),
   url: z.string().optional(),
   result: journeyResultSchema.optional(),

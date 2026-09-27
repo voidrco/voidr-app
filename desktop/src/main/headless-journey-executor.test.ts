@@ -20,6 +20,19 @@ describe('headless Loops execution boundary', () => {
     expect(executor.running).toBe(false);
   });
 
+  it('preserves an observed rejection without turning it into business confirmation', async () => {
+    const item = input();
+    const engine = vi.fn<typeof runEngine>(async options => {
+      options.onEvent?.({ type: 'step_done', stepIndex: 0, outcome: 'unconfirmed', message: 'Requested rejection observed' });
+      return result;
+    });
+    const executor = new HeadlessJourneyExecutor(engine); executor.reserve();
+    const state = await executor.executePlanned(item);
+    expect(item.onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'step_done', outcome: 'unconfirmed' }));
+    expect(state.events).toContainEqual(expect.objectContaining({ type: 'step_done', outcome: 'unconfirmed' }));
+    executor.release();
+  });
+
   it('does not run without a reservation or after cancellation before start', async () => {
     const engine = vi.fn<typeof runEngine>();
     const executor = new HeadlessJourneyExecutor(engine);

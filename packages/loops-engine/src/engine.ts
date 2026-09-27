@@ -7,7 +7,7 @@ import { chromium, type Browser, type BrowserContext, type Page, type Video } fr
 import { actionLabel, buildActions, describeAction, executeAction, type Action, type Interaction } from "./actions.js";
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
-import { createDecider } from "./decide.js";
+import { createDecider, type StepOutcome } from "./decide.js";
 import { extractValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
 import { TargetBlockedError } from "./target.js";
@@ -19,6 +19,7 @@ import { paintInteraction } from "./visuals.js";
 export type EngineEvent = {
   type: "started" | "observation" | "interaction" | "step_started" | "action" | "step_done" | "finalizing" | "finished" | "timing" | "recovery" | "assertion" | "intervention";
   message?: string; stepIndex?: number; confidence?: number;
+  outcome?: StepOutcome;
   screenshot?: string; url?: string; result?: RunResult;
   interaction?: Interaction; executed?: boolean;
   timing?: TimingSpan;
@@ -73,6 +74,7 @@ async function selectNext(runtime: Runtime, observation: Observation) {
   const verifiedObservation = await credentialEvidence(runtime.page, observation, options.secrets);
   const decision = await runtime.decide({ ...redactor.redact({ steps: options.config.steps, stepIndex, observation: verifiedObservation,
     actions, stepKind: options.config.stepKinds?.[stepIndex], history: actionEvidence(runtime, observation), failures: runtime.recovery.failures,
+    interaction: interactionEvidence(runtime, observation),
     }), signal: options.signal, measure: runtime.timing.measure });
   if (decision.assertion?.evidence) decision.assertion.evidence = observation.evidence?.find(item => item.id === decision.assertion.evidence?.id);
   runtime.inputTokens += decision.usage.input_tokens;
@@ -84,13 +86,27 @@ async function selectNext(runtime: Runtime, observation: Observation) {
   return { action, decision };
 }
 
+function textDelta(before: string, after: string) {
+  const previous = new Set(before.split("\n"));
+  const current = new Set(after.split("\n"));
+  return {
+    added: after.split("\n").filter((line) => line.trim() && !previous.has(line)).slice(0, 30),
+    removed: before.split("\n").filter(line => line.trim() && !current.has(line)).slice(0, 30),
+  };
+}
+
+/** Evidência do próprio motor sobre a interação do passo atual: a ação foi executada de fato e este
+ * é o texto novo que a página mostrou depois dela. O modelo nunca é a fonte desta informação, e uma
+ * mudança arbitrária de página não vale como resultado observado. */
+function interactionEvidence(runtime: Runtime, observation: Observation) {
+  if (!runtime.lastAction) return { performed: false, added: [] };
+  return { performed: true, added: textDelta(runtime.lastAction.previousText, observation.text).added };
+}
+
 function actionEvidence(runtime: Runtime, observation: Observation) {
   if (!runtime.lastAction) return runtime.history;
-  const before = new Set(runtime.lastAction.previousText.split("\n"));
-  const after = new Set(observation.text.split("\n"));
-  const added = observation.text.split("\n").filter((line) => line.trim() && !before.has(line)).slice(0, 30);
-  const removed = runtime.lastAction.previousText.split("\n").filter(line => line.trim() && !after.has(line)).slice(0, 30);
-  return [...runtime.history.slice(0, -1), JSON.stringify({ interaction: runtime.lastAction.label, execution: "completed", previousValue: runtime.lastAction.value, addedText: added, removedText: removed })];
+  const { added, removed } = textDelta(runtime.lastAction.previousText, observation.text);
+  return [...runtime.history.slice(0, -1), JSON.stringify({ interaction: runtime.lastAction.label, execution: "interaction_completed", previousValue: runtime.lastAction.value, addedText: added, removedText: removed })];
 }
 
 function recover(runtime: Runtime, failure: RecoveryFailure, observation: Observation, action?: Action) {
@@ -103,8 +119,9 @@ function recover(runtime: Runtime, failure: RecoveryFailure, observation: Observ
     reason: `Não foi possível concluir o passo após 3 recuperações. ${failure.reason}` };
 }
 
-function completeStep(runtime: Runtime, confidence: number) {
-  runtime.options.onEvent?.({ type: "step_done", stepIndex: runtime.stepIndex, confidence, message: runtime.options.config.steps[runtime.stepIndex] });
+function completeStep(runtime: Runtime, confidence: number, outcome: StepOutcome) {
+  runtime.records.at(-1)!.outcome = outcome;
+  runtime.options.onEvent?.({ type: "step_done", stepIndex: runtime.stepIndex, confidence, outcome, message: runtime.options.config.steps[runtime.stepIndex] });
   Object.assign(runtime, { stepIndex: runtime.stepIndex + 1, history: [], lastAction: undefined, recovery: new StepRecovery() });
   return null;
 }
@@ -135,12 +152,12 @@ async function advance(runtime: Runtime) {
       return exhausted ? { ...exhausted, status: 'unverified' } : null;
     }
     if (assertion.status === "failed") return { status: "assertion_failed", reason: assertion.reason };
-    return completeStep(runtime, confidence);
+    return completeStep(runtime, confidence, "confirmed");
   }
   if ((confidence < MIN_CONFIDENCE || decision.requiresVerification) && !decision.actionVerified) {
     return recover(runtime, { kind: "uncertain", reason: "A ação proposta não teve confiança suficiente.", outcome: "not_executed" }, observation, action);
   }
-  if (selected === "step_done") return completeStep(runtime, confidence);
+  if (selected === "step_done") return completeStep(runtime, confidence, decision.outcome ?? "confirmed");
   if (selected === "blocked") return { status: "blocked", reason: "Este passo encontrou uma rejeição ou exige dados não fornecidos. Consulte as evidências." };
   if (!action) return recover(runtime, { kind: "no_action", reason: "Não foi encontrada uma ação válida para concluir o objetivo.", outcome: "not_executed" }, observation);
   return performNext({ runtime, observation, action, confidence });
