@@ -1025,9 +1025,9 @@ export class VoidrServiceClient {
     });
   }
 
-  aiTesterPendingLaunches(accessToken?: string) {
+  aiTesterPendingLaunches(accessToken?: string, target: 'desktop' | 'headless' = 'desktop') {
     const root = this.runtime.localAdapter ? 'loop-test-dev' : 'loop-test';
-    return jsonRequest<Array<{ loopId: string; runId: string }>>(`${this.runtime.serviceUrl}/${root}/ai-tester-launches`, {
+    return jsonRequest<Array<{ loopId: string; runId: string }>>(`${this.runtime.serviceUrl}/${root}/ai-tester-launches${target === 'headless' ? '?target=headless' : ''}`, {
       headers: this.workspaceHeaders(accessToken),
     });
   }

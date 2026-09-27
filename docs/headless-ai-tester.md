@@ -19,4 +19,12 @@ A headless browser cannot service an interactive human authentication prompt. Th
 - The opt-in Chromium test executes a real click, records a screenshot/video/result and verifies a human-intervention failure. Its decision function is deterministic; it does not prove model reasoning or customer resolution. Set `VOIDR_TEST_CHROMIUM_EXECUTABLE` to an installed Chromium executable to run it.
 - The Node bundle imports successfully without Electron.
 
-The worker scheduler/registration and dispatch from Assistant-requested runs are not wired by this change. No real nstech run or deployed application revision has been validated through this executor yet. These are the next integration boundaries, not completed outcomes.
+## Automatic queue consumption
+
+The `headless-ai-worker.cjs` bundle exports `runHeadlessAiWorker(options)`. It polls the authenticated actor's `ai-tester-launches?target=headless` queue and calls the runner for each pending request. Assistant MCP requests default to this target; desktop remains an explicit option. Service restricts headless claims to the requesting actor. No alternate identity is used when access fails.
+
+Use a stable `actorId` matching the session provider and a private durable root for that worker identity. The ID partitions local state; authorization comes from the Service token, not the supplied ID. The worker fails before consuming requests when its model key is missing. It persists dispatch references before execution and records completion. On restart, a run already claimed is eligible only for evidence recovery; uncertain browser actions are never replayed. Upload failures preserve the pending dispatch and stop the worker for a supervised retry. Access failures also stop it rather than switching credentials. A process crash leaves a lock for explicit reconciliation, not automatic takeover.
+
+Tests cover automatic consumption, actor-scoped routing, terminal dispatch deduplication, restart into evidence-only recovery, missing model configuration and denied access. A live local authenticated MCP/REST proof confirmed default headless routing, desktop exclusion, stable request retries and cancellation removing the request. That proof did not execute the browser or use a model to request the run.
+
+A deployment supervisor, valid worker model configuration and a complete Collector/storage setup are still required. No real nstech run or deployed application revision has been validated through this worker yet.

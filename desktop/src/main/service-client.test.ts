@@ -21,6 +21,16 @@ afterEach(() => {
 });
 
 describe("VoidrServiceClient", () => {
+  it('keeps desktop and headless launch discovery separate', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    const client = new VoidrServiceClient(runtime);
+    await client.aiTesterPendingLaunches();
+    await client.aiTesterPendingLaunches(undefined, 'headless');
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://127.0.0.1:3000/v1/loop-test-dev/ai-tester-launches',
+      'http://127.0.0.1:3000/v1/loop-test-dev/ai-tester-launches?target=headless',
+    ]);
+  });
   it("projects the canonical workspace logo, name and signed-in user from auth/me", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
