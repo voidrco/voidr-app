@@ -8,7 +8,7 @@ import { actionLabel, buildActions, describeAction, executeAction, type Action, 
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
 import { createDecider, type StepOutcome } from "./decide.js";
-import { extractValues } from "./values.js";
+import { executionValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
 import { TargetBlockedError } from "./target.js";
 import { RunTiming, type TimingSpan } from "./timing.js";
@@ -69,10 +69,10 @@ async function captureFrame(runtime: Runtime) {
 
 async function selectNext(runtime: Runtime, observation: Observation) {
   const { options, stepIndex } = runtime;
-  const actions = runtime.recovery.candidates(buildActions(observation, extractValues(options.config.steps[stepIndex]!)), observation);
+  const actions = runtime.recovery.candidates(buildActions(observation, executionValues(options.config.steps[stepIndex]!, options.config.data)), observation);
   const redactor = secretRedactor(options.secrets);
   const verifiedObservation = await credentialEvidence(runtime.page, observation, options.secrets);
-  const decision = await runtime.decide({ ...redactor.redact({ steps: options.config.steps, stepIndex, observation: verifiedObservation,
+  const decision = await runtime.decide({ ...redactor.redact({ steps: options.config.steps, data: options.config.data, stepIndex, observation: verifiedObservation,
     actions, stepKind: options.config.stepKinds?.[stepIndex], history: actionEvidence(runtime, observation), failures: runtime.recovery.failures,
     interaction: interactionEvidence(runtime, observation),
     }), signal: options.signal, measure: runtime.timing.measure });

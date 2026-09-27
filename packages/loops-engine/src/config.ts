@@ -1,6 +1,7 @@
 export type JourneyConfig = {
   url: string;
   steps: string[];
+  data?: string[];
   stepKinds?: ("action" | "assertion")[];
   expected: string[];
   headed: boolean;
@@ -23,6 +24,11 @@ export function validateConfig(input: unknown): JourneyConfig {
     || steps.some((step) => typeof step !== "string" || !step.trim() || step.length > 2_000)) {
     throw new Error("Escreva de 1 a 40 passos, um por linha, com até 2.000 caracteres cada.");
   }
+  const data = raw.data as string[] | undefined;
+  if (data !== undefined && (!Array.isArray(data) || data.length > 30
+    || data.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000))) {
+    throw new Error('Dados de teste devem conter até 30 referências com até 2.000 caracteres.');
+  }
   const expected = typeof raw.expected === "string" ? parseSteps(raw.expected) : raw.expected ?? [];
   if (!Array.isArray(expected) || expected.length > 20
     || expected.some((text) => typeof text !== "string" || !text.trim() || text.length > 1_000)) {
@@ -35,5 +41,5 @@ export function validateConfig(input: unknown): JourneyConfig {
   const stepKinds = raw.stepKinds as JourneyConfig['stepKinds'];
   if (stepKinds && (!Array.isArray(stepKinds) || stepKinds.length !== steps.length
     || stepKinds.some(kind => !['action', 'assertion'].includes(kind)))) throw new Error('Classificação dos passos inválida.');
-  return { url: url.href, steps, stepKinds, expected, headed: raw.headed === true, maxActions };
+  return { url: url.href, steps, stepKinds, ...(data ? { data } : {}), expected, headed: raw.headed === true, maxActions };
 }

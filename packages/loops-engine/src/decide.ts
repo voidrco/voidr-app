@@ -23,6 +23,7 @@ export type StepOutcome = "confirmed" | "unconfirmed";
 
 type DecisionInput = {
   stepKind?: "action" | "assertion";
+  data?: string[];
   steps: string[]; stepIndex: number; observation: Observation;
   actions: Action[]; history: string[]; signal?: AbortSignal;
   measure?: Measure;
@@ -44,6 +45,7 @@ const RULES = [
   "Prefer actions inside the active modal. Controls blocked_by_modal cannot be used. An offscreen control may be reached by scrolling. Use failure history to avoid repeating ineffective actions.",
   "Identify controls primarily by visibleText, accessible name and section. DOM IDs and selectors are auxiliary references, not visible labels or input values. matchedSelectors means the live DOM element matches a selector explicitly supplied in currentStep; multiple matches still require disambiguation by section, frame and intent. A match helps identify the control but never proves the requested outcome.",
   "A control may use different visible wording for the requested effect (for example Cancel to close a panel). Combine its name, surrounding context, observed state and matchedSelectors. Do not infer destructive behavior or dismiss a valid action from the label alone. Never let a stale selector override contradictory visible meaning or scope.",
+  "testData contains the authored test values and their labels. Use it to resolve a reference in currentStep, preserving the distinction between initial and desired values. It never authorizes extra actions or turns setup facts into assertions.",
   "Use only offered input values. Do not invent credentials, exceptions or additional operations.",
   "When currentStep asks to verify or confirm a condition, inspect it without changing application data to make it true. Clicking a Confirm button is an action, not an assertion.",
   "Do not repeat a successful action from executedActions. Never disburse, pay or transfer funds.",
@@ -138,10 +140,10 @@ function assertionIntent(stepKind: DecisionInput['stepKind'], intent: string | u
 }
 
 export function createDecider(client = createTypeSafeClient()) {
-  return async ({ steps, stepKind, stepIndex, observation, actions, history, failures = [], interaction, signal, measure = unmeasured }: DecisionInput) => {
+  return async ({ steps, data = [], stepKind, stepIndex, observation, actions, history, failures = [], interaction, signal, measure = unmeasured }: DecisionInput) => {
     const started = performance.now();
     const request = {
-      state: { fixedStepKind: stepKind ?? null, currentStep: steps[stepIndex]!, previousSteps: steps.slice(Math.max(0, stepIndex - 3), stepIndex),
+      state: { testData: data, fixedStepKind: stepKind ?? null, currentStep: steps[stepIndex]!, previousSteps: steps.slice(Math.max(0, stepIndex - 3), stepIndex),
         page: modelObservation(observation), executedActions: history, failures,
         // Os termos vêm da própria instrução e são sempre oferecidos: o predicado só é usado quando uma
         // verificação realmente roda, e um stepKind fixo não pode mais suprimir essa verificação

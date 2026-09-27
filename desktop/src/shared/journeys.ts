@@ -15,6 +15,7 @@ export const journeyConfigSchema = z
         );
       }, "Use uma URL HTTP ou HTTPS sem credenciais."),
     steps: z.array(z.string().trim().min(1).max(2000)).min(1).max(40),
+    data: z.array(z.string().trim().min(1).max(2000)).max(30).optional(),
     stepKinds: z.array(z.enum(["action", "assertion"])).optional(),
     expected: z.array(z.string().trim().min(1).max(1000)).max(20),
     headed: z.boolean(),

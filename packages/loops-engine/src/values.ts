@@ -29,3 +29,8 @@ export function assertionTerms(instruction: string) {
   const numbers = condition.replace(/^\s*\d+[.)]\s*/, "").match(NUMBER) ?? [];
   return [...new Set([...quoted, ...numbers.map(normalizeNumber)])];
 }
+
+/** Only authored step/data values are offered; page text never supplies new input data. */
+export function executionValues(instruction: string, data: string[] = []) {
+  return [...new Set([...extractValues(instruction), ...data.flatMap(extractValues)])].slice(0, 20);
+}

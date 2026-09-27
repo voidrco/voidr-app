@@ -183,7 +183,7 @@ export class AiTesterController {
     });
     const state = await this.deps.loops.executePlanned({
       runId: journal.run.runId,
-      config: { url: journal.run.targetUrl, steps: journey.steps.map(step => step.instruction), stepKinds: journey.steps.map(step => step.kind), expected: [], headed: false, maxActions: 100 },
+      config: { url: journal.run.targetUrl, data: journey.data, steps: journey.steps.map(step => step.instruction), stepKinds: journey.steps.map(step => step.kind), expected: [], headed: false, maxActions: 100 },
       secrets, collector: prepared.collector, outputRoot: path.join(this.root, journal.run.runId, journey.id),
       onEvent: event => { if (['step_started', 'step_done', 'intervention'].includes(event.type))
         void this.enqueue(() => this.progress(event.type === 'intervention' ? 'awaiting_intervention' : 'running', event)); },
