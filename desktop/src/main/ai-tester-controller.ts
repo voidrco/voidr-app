@@ -1,3 +1,4 @@
+import { uploadEvidenceFiles, type EvidenceFile } from './ai-evidence-upload';
 import { app, shell } from 'electron';
 import { mkdir, readFile, writeFile, rename, stat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,7 +14,7 @@ import { newAiCapture, prepareAiCapture, syncAiCapture, type AiCaptureRecord } f
 
 type Session = { client: VoidrServiceClient; accessToken?: string };
 type Api = <T>(path?: string, body?: unknown) => Promise<T>;
-type UploadFile = { journeyId: string; name: string; file: string; contentType: string; uploaded?: boolean };
+type UploadFile = EvidenceFile;
 type Journal = { run: AiRun; executorId: string; organizationId: string; serviceUrl: string; files: UploadFile[]; captures?: AiCaptureRecord[]; sequence: number; pending?: Record<string, unknown> };
 const terminal = (status: string) => ['completed', 'cancelled', 'interrupted', 'blocked', 'planning_failed'].includes(status);
 const runResult = (journey: AiJourney, state: JourneyState): AiResult => ({
@@ -199,31 +200,14 @@ export class AiTesterController {
     return existing.filter((file): file is UploadFile => Boolean(file));
   }
   private async upload(journal: Journal, api: Api, runtime: LocalRuntimeConfig) {
-    for (const file of journal.files.filter(item => !item.uploaded)) {
-      const bytes = await readFile(file.file);
-      const prefix = `/${journal.run.runId}/artifacts`;
-      const contract = await api<{ id: string; uploaded: boolean; upload?: { uploadUrl: string; method?: string; headers?: Record<string, string>; formFields?: Record<string, string> } }>(prefix,
-        { executorId: journal.executorId, artifact: { journeyId: file.journeyId, name: file.name, contentType: file.contentType, size: bytes.length } });
-      if (!contract.uploaded) await this.sendFile(contract.upload!, file, bytes);
-      await api(`${prefix}/${contract.id}/confirm`, { executorId: journal.executorId });
-      file.uploaded = true;
-      await this.persist(journal);
-    }
+    await uploadEvidenceFiles({ runId: journal.run.runId, executorId: journal.executorId,
+      files: journal.files, api, persist: () => this.persist(journal) });
     const sync = { failed: false };
     for (const capture of journal.captures ?? []) await syncAiCapture({ runtime, api, run: journal.run,
       executorId: journal.executorId, capture, persist: () => this.persist(journal) }).catch(() => { sync.failed = true; });
     if (sync.failed) throw new Error('Há gravações do Collector pendentes. Reenvie as evidências para concluir.');
     if (!journal.pending) journal.run = aiRunSchema.parse(await api(`/${journal.run.runId}`));
     this.publish({ run: journal.run, uploadPending: Boolean(journal.pending), error: undefined });
-  }
-  private async sendFile(upload: { uploadUrl: string; method?: string; headers?: Record<string, string>; formFields?: Record<string, string> }, file: UploadFile, bytes: Buffer) {
-    const blob = new Blob([new Uint8Array(bytes)], { type: file.contentType });
-    const form = new FormData();
-    Object.entries(upload.formFields ?? {}).forEach(([key, value]) => form.append(key, value));
-    form.append('file', blob, file.name);
-    const response = await fetch(upload.uploadUrl, { method: upload.method ?? 'PUT', signal: AbortSignal.timeout(120_000),
-      headers: upload.method === 'POST' ? upload.headers : { 'Content-Type': file.contentType, ...upload.headers }, body: upload.method === 'POST' ? form : blob });
-    if (!response.ok && ![409, 412].includes(response.status)) throw new Error('Falha ao enviar evidência.');
   }
   async retry(input: AiRequest) {
     if (this.state.busy || this.deps.loops.running) throw new Error('Aguarde a execução terminar.');
