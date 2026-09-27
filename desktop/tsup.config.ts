@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/main/index.ts',
     'loops-worker': 'src/main/loops-worker.ts',
+    'headless-ai-tester': 'src/main/headless-ai-tester.ts',
     control: 'src/preload/control.ts',
   },
   outDir: 'dist/main',

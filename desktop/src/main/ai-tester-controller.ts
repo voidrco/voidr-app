@@ -1,5 +1,4 @@
 import { uploadEvidenceFiles, type EvidenceFile } from './ai-evidence-upload';
-import { app, shell } from 'electron';
 import { mkdir, readFile, writeFile, rename, stat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -8,7 +7,7 @@ import { z } from 'zod';
 import type { LocalRuntimeConfig } from '@voidr/capture-contracts';
 import { aiScenarioSchema, aiRunSchema, type AiJourney, type AiRequest, type AiResult, type AiRun, type AiState } from '../shared/ai-tester';
 import type { JourneyEvent, JourneyState } from '../shared/journeys';
-import { LoopsController } from './loops-controller';
+import type { AiJourneyExecutor } from './ai-journey-executor';
 import type { VoidrServiceClient } from './service-client';
 import { newAiCapture, prepareAiCapture, syncAiCapture, type AiCaptureRecord } from './ai-collector-session';
 
@@ -32,8 +31,8 @@ export class AiTesterController {
   private state: AiState = { busy: false, uploadPending: false };
   private current?: { journal: Journal; api: Api; runtime: LocalRuntimeConfig; controller: AbortController };
   private queue: Promise<void> = Promise.resolve();
-  private get root() { return path.join(app.getPath('userData'), 'loops', 'ai-tester'); }
-  constructor(private readonly deps: { loops: LoopsController; session: (runtime: LocalRuntimeConfig) => Promise<Session>; publish: (state: AiState) => void }) {}
+  private get root() { return this.deps.root; }
+  constructor(private readonly deps: { root: string; openExternal: (url: string) => Promise<unknown>; loops: AiJourneyExecutor; session: (runtime: LocalRuntimeConfig) => Promise<Session>; publish: (state: AiState) => void }) {}
   status() { return this.state; }
   clear() {
     if (this.state.busy) throw new Error('Aguarde a execução terminar.');
@@ -132,6 +131,7 @@ export class AiTesterController {
   }
   private async execute() {
     const current = this.current!;
+    let claimed = false;
     const heartbeat = setInterval(() => { void this.enqueue(async () => {
       const remote = aiRunSchema.parse(await current.api(`/${current.journal.run.runId}`));
       if (remote.cancelRequested) { current.controller.abort(); this.deps.loops.stop(); }
@@ -142,14 +142,17 @@ export class AiTesterController {
       current.controller.signal.throwIfAborted();
       const prefix = `/${current.journal.run.runId}`;
       await current.api(`${prefix}/claim`, { executorId: current.journal.executorId });
+      claimed = true;
       const secrets = z.record(z.string(), z.string()).parse(await current.api(`${prefix}/credentials`, { executorId: current.journal.executorId }));
       for (const journey of current.journal.run.plan!.journeys.filter(item => !current.journal.run.results.some(result => result.journeyId === item.id))) await this.executeJourney(journey, secrets);
       await this.enqueue(() => this.progress(current.controller.signal.aborted ? 'cancelled' : 'completed'));
       await this.upload(current.journal, current.api, current.runtime);
     } catch {
       if (current.journal.run.status === 'planning' && current.controller.signal.aborted) current.journal.run.status = 'cancelled';
-      if (current.journal.run.status !== 'planning' && !terminal(current.journal.run.status))
-        await this.enqueue(() => this.progress(current.controller.signal.aborted ? 'cancelled' : 'interrupted'));
+      if (current.journal.run.status !== 'planning' && !terminal(current.journal.run.status)) {
+        if (claimed) await this.enqueue(() => this.progress(current.controller.signal.aborted ? 'cancelled' : 'interrupted'));
+        else current.journal.run.status = current.controller.signal.aborted ? 'cancelled' : 'interrupted';
+      }
       await this.persist(current.journal);
       this.publish({ run: current.journal.run, error: 'A execução foi interrompida. Resultados parciais foram preservados.', uploadPending: true });
     } finally {
@@ -254,6 +257,6 @@ export class AiTesterController {
   async artifact(input: AiRequest & { artifactId: string }) {
     const result = await (await this.api(input))<{ url: string }>(`/${z.string().uuid().parse(input.runId)}/artifacts/${encodeURIComponent(input.artifactId)}`);
     if (!/^https?:\/\//.test(result.url)) throw new Error('Endereço de evidência inválido.');
-    await shell.openExternal(result.url);
+    await this.deps.openExternal(result.url);
   }
 }

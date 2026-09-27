@@ -1081,6 +1081,8 @@ if (!lock) {
       captureBusy: () => Boolean(launchAcceptanceFlight || (webCapture && !["idle", "ready_for_review", "terminal_error"].includes(webCapture.status.stage))) });
     await journeys.initialize();
     aiTester = new AiTesterController({ loops: journeys,
+      root: path.join(app.getPath('userData'), 'loops', 'ai-tester'),
+      openExternal: url => shell.openExternal(url),
       session: runtime => createWorkspaceSession(runtime, loopParticipantAuth),
       publish: state => mainWindow?.webContents.send('ai-tester:changed', state),
     });
