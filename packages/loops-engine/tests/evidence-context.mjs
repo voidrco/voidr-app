@@ -40,13 +40,13 @@ try {
   const wrongRow = observation.evidence.find(region => region.text === 'Blue Top 13');
   let selected;
   await verifyAssertionEvidence({ client: { systemOne: async request => {
-    selected = request.state.selectedEvidence;
+    selected = request.state;
     return { model: 'fixture', answers: { sufficient: { noul: 1 }, satisfied: { noul: 0 } }, usage: { input_tokens: 1, output_tokens: 1 } };
   } }, instruction: 'Verify "Blue Top" quantity 3', previousSteps: [], evidence: wrongRow,
   regions: observation.evidence, measure: unmeasured });
-  assert.equal(selected.context.scope, 'region');
-  assert.equal(selected.context.controls.some(control => control.name === 'Sign out'), false);
-  assert.equal(selected.text, 'Blue Top 13');
+  assert.equal(selected.coverage.scope, 'region');
+  assert.equal(selected.coverage.controls.some(control => control.name === 'Sign out'), false);
+  assert.equal(selected.visibleText, 'Blue Top 13');
   const failed = await verifyAssertion({ ...request, instruction: 'Verify "Blue Top" quantity 3', evidence: wrongRow, predicate: 'contains' });
   assert.equal(failed.status, 'failed', 'Unrelated document title/other row must not satisfy exact business values');
 
