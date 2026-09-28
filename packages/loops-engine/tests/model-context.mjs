@@ -32,6 +32,27 @@ assert.equal(retries, 3, 'Context rejection is retried only with strictly smalle
 assert.equal(recovered.answers.b.choice, 'last');
 assert.equal(recovered.context.rejectedRequestUsageUnknown, true);
 assert.equal(recovered.usage.input_tokens, 14);
+const alternatives = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`a${i}`, `Exact option ${i}: ` + 'x'.repeat(900)]));
+const paged = { state: { exact: 'Preserve all controls and uncertain action history' },
+  questions: { next: choice('Select the best offered action', { ...alternatives, unsure: 'No valid action' }) } };
+const seen = new Set(); let selectionCalls = 0;
+const selected = await boundedSystemOne({ systemOne: async request => {
+  selectionCalls++;
+  assert.deepEqual(request.state, paged.state);
+  const criteria = request.questions.next.criteria;
+  for (const [key, description] of Object.entries(criteria)) {
+    seen.add(key); assert.equal(description, paged.questions.next.criteria[key]);
+  }
+  const answer = Object.hasOwn(criteria, 'a99') ? 'a99' : Object.keys(criteria)[0];
+  return { ...responseFor(request), answers: { next: { type: 'choice', choice: answer, confidence: 1, probabilities: {} } } };
+} }, paged);
+assert.equal(selected.answers.next.choice, 'a99', 'A correct action at the end of the full list must remain selectable');
+assert.equal(seen.size, 101, 'Every alternative must be assessed with the complete observation');
+assert.equal(selected.usage.input_tokens, selectionCalls * 7);
+const abstained = await boundedSystemOne({ systemOne: async request => responseFor(request) }, paged);
+assert.equal(abstained.answers.next.choice, 'unsure', 'All groups abstaining must not authorize an action');
+await assert.rejects(boundedSystemOne({ systemOne: async request => ({ ...responseFor(request),
+  answers: { next: { type: 'choice', choice: 'invented-action', confidence: 1 } } }) }, paged), /outside its context group/);
 let oversizeCalls = 0;
 await assert.rejects(boundedSystemOne({ systemOne: async () => { oversizeCalls++; } }, {
   state: 'x'.repeat(MODEL_REQUEST_BYTES), questions: { assertion: noul('Prove absence') },
