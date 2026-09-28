@@ -55,10 +55,12 @@ const MIN_CONFIDENCE = 0.5;
 
 async function capture(runtime: Runtime) {
   assertPageOpen(runtime.page);
-  if (runtime.options.captureSession) await withDeadline("Inicializar Collector", 15_000, () => runtime.options.captureSession!.ready(runtime.page));
   runtime.last = await settledObservation(runtime.page, runtime.options.signal, runtime.timing.measure,
     selectorReferences(runtime.options.config.steps[runtime.stepIndex] ?? ""));
   await captureFrame(runtime);
+  // Keep the current DOM/screenshot even when instrumentation fails after navigation.
+  // Readiness still gates further actions; evidence must not describe the old page.
+  if (runtime.options.captureSession) await withDeadline("Inicializar Collector", 15_000, () => runtime.options.captureSession!.ready(runtime.page));
   return runtime.last;
 }
 

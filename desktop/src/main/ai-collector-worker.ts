@@ -54,7 +54,17 @@ export class AiCollectorWorker {
           const value = allowCollectorInContentSecurityPolicy({ [header.name]: [header.value] }, this.input.collectorUrl);
           return { name: header.name, value: value?.[header.name]?.[0] ?? header.value };
         });
-        await cdp.send('Fetch.continueResponse', { requestId: event.requestId, responseCode: event.responseStatusCode ?? 200, responseHeaders: rewritten });
+        if (rewritten.some((header, index) => header.value !== headers[index]?.value)) {
+          // Chromium can acknowledge continueResponse yet retain the original CSP.
+          // Fulfil the already received response with its original body: no second
+          // request, no script injection into the application's world, no CSP bypass.
+          const body = await cdp.send('Fetch.getResponseBody', { requestId: event.requestId });
+          await cdp.send('Fetch.fulfillRequest', {
+            requestId: event.requestId, responseCode: event.responseStatusCode ?? 200,
+            responseHeaders: rewritten.filter(header => !/^(content-length|content-encoding)$/i.test(header.name)),
+            body: body.base64Encoded ? body.body : Buffer.from(body.body).toString('base64'),
+          });
+        } else await cdp.send('Fetch.continueResponse', { requestId: event.requestId, responseCode: event.responseStatusCode ?? 200, responseHeaders: rewritten });
       })().catch(() => cdp.send('Fetch.continueRequest', { requestId: event.requestId }).catch(() => undefined));
       this.pending.add(task);
       void task.finally(() => this.pending.delete(task));

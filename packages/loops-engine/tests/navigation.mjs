@@ -48,4 +48,13 @@ try {
  assert.equal(saved.finalObservation.url,origin+'/Login');
  assert.ok(result.artifacts.videos.length>0);
  console.log('OK: real Chromium leaves an initial 401 for the authored login route, with trace and video.');
+ const failedCapture=await runEngine({config:{url:origin,steps:['Open /Login'],stepKinds:['action'],expected:[],headed:false,maxActions:5},outputRoot,
+  captureSession:{setup:async()=>{},finish:async()=>{},ready:async page=>{if(page.url().endsWith('/Login'))throw Error('Collector unavailable on destination');}},
+  decide:async input=>({answer:answer(input.actions.find(x=>x.kind==='navigate').id),requiresVerification:false,actionVerified:false,usage:{input_tokens:0,output_tokens:0}})});
+ assert.equal(failedCapture.status,'error');assert.equal(failedCapture.completedSteps,0);
+ const failedReport=JSON.parse(await readFile(join(failedCapture.output,'result.json'),'utf8'));
+ assert.equal(failedReport.finalObservation.url,origin+'/Login');
+ assert.equal(failedReport.finalObservation.text,'Login ready');
+ assert.ok((await readFile(join(failedCapture.output,'final.png'))).length>0);
+ console.log('OK: Collector failure preserves destination evidence and cannot pass the test.');
 } finally { server.close();await once(server,'close');await rm(outputRoot,{recursive:true,force:true}); }
