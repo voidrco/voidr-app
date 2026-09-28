@@ -3,6 +3,7 @@ import type { Interaction } from "./actions.js";
 
 export async function paintInteraction(page: Page, interaction: Interaction) {
   await page.evaluate(event => {
+    if (!document.body) return; // A navigation can replace the document between action and visual feedback.
     const host = document.querySelector('[data-voidr-overlay]') ?? document.body.appendChild(document.createElement('div'));
     host.setAttribute('data-voidr-overlay', '');
     const state = host as HTMLElement & { visual?: ShadowRoot };

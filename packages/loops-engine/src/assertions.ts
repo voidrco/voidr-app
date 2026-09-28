@@ -6,6 +6,7 @@ import { prepareTarget } from "./target.js";
 import { paintInteraction } from "./visuals.js";
 import { unmeasured, type Measure } from "./timing.js";
 import { assertionTerms } from "./values.js";
+import { captureViewport, type CaptureInfo } from "./screenshot.js";
 
 export type AssertionResult = {
   stepIndex: number; instruction: string; status: "passed" | "failed" | "unverified";
@@ -13,6 +14,7 @@ export type AssertionResult = {
   reason: string; screenshot?: string; interaction?: Interaction; durationMs: number;
   predicate: string; terms: string[];
   url: string;
+  capture?: CaptureInfo;
 };
 type AssertionOptions = {
   page: Page; stepIndex: number; instruction: string; evidence?: AssertionEvidence;
@@ -80,7 +82,7 @@ export async function verifyAssertion(deps: AssertionOptions): Promise<Assertion
   await tracing.group(`${result.status === 'passed' ? 'PASS' : 'FAIL'}: ${deps.instruction}`);
   try {
     await paintInteraction(deps.page, result.interaction);
-    result.screenshot = `data:image/jpeg;base64,${(await deps.page.screenshot({ type: 'jpeg', quality: 80 })).toString('base64')}`;
+    result.screenshot = `data:image/jpeg;base64,${(await captureViewport(deps.page, { type: 'jpeg', quality: 80, onCapture: info => { result.capture = info; } })).toString('base64')}`;
     await deps.onInteraction?.(result.interaction, result.screenshot);
   } finally { await tracing.groupEnd().catch(() => undefined); }
   result.durationMs = Math.round(performance.now() - started);

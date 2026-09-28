@@ -8,6 +8,7 @@ import { actionLabel, buildActions, describeAction, executeAction, type Action, 
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
 import { createDecider, type StepOutcome } from "./decide.js";
+import { captureViewport, type CaptureInfo } from "./screenshot.js";
 import { navigationActions } from "./navigation.js";
 import { executionValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
@@ -18,7 +19,7 @@ import { verifyAssertion, type AssertionResult } from "./assertions.js";
 import { paintInteraction } from "./visuals.js";
 
 export type EngineEvent = {
-  type: "started" | "observation" | "interaction" | "step_started" | "action" | "step_done" | "finalizing" | "finished" | "timing" | "recovery" | "assertion" | "intervention";
+  type: "started" | "observation" | "interaction" | "step_started" | "action" | "step_done" | "finalizing" | "finished" | "timing" | "recovery" | "assertion" | "intervention" | "evidence_warning";
   message?: string; stepIndex?: number; confidence?: number;
   outcome?: StepOutcome;
   screenshot?: string; url?: string; result?: RunResult;
@@ -65,9 +66,16 @@ async function capture(runtime: Runtime) {
 }
 
 async function captureFrame(runtime: Runtime) {
-  runtime.screenshot = await runtime.timing.measure("capture", "Capturar tela para observação", () => runtime.page.screenshot({ type: "png", timeout: 3_000 }));
+  runtime.screenshot = await runtime.timing.measure("capture", "Capturar tela para observação", () => captureViewport(runtime.page, { type: "png", onCapture: info => recordCapture(runtime, info) }));
   runtime.options.onEvent?.({ type: "observation", stepIndex: runtime.stepIndex,
     screenshot: `data:image/png;base64,${runtime.screenshot.toString("base64")}`, url: runtime.page.url() });
+}
+
+function recordCapture(runtime: Runtime, info: CaptureInfo) {
+  if (!info.fontsPending) return;
+  runtime.interactions.push({ stepIndex: runtime.stepIndex, kind: 'capture', ...info, timestamp: new Date().toISOString() });
+  runtime.options.onEvent?.({ type: 'evidence_warning', stepIndex: runtime.stepIndex,
+    message: 'Captura do viewport renderizado enquanto fontes externas ainda carregavam; verificação do DOM preservada.' });
 }
 
 async function selectNext(runtime: Runtime, observation: Observation) {
@@ -198,7 +206,7 @@ async function showInteraction(runtime: Runtime, interaction: Interaction, frame
   runtime.options.signal?.throwIfAborted();
   if (interaction.phase !== "scrolling") await paintInteraction(runtime.page, interaction);
   const screenshot = frame ?? (interaction.phase === "acting" ? undefined
-    : `data:image/jpeg;base64,${(await runtime.timing.measure("capture", "Capturar interação do agente", () => runtime.page.screenshot({ type: "jpeg", quality: 80, timeout: 3_000 }))).toString("base64")}`);
+    : `data:image/jpeg;base64,${(await runtime.timing.measure("capture", "Capturar interação do agente", () => captureViewport(runtime.page, { type: "jpeg", quality: 80, onCapture: info => recordCapture(runtime, info) }))).toString("base64")}`);
   runtime.interactions.push({ stepIndex: runtime.stepIndex, ...interaction, timestamp: new Date().toISOString() });
   runtime.options.onEvent?.({ type: "interaction", stepIndex: runtime.stepIndex, interaction, screenshot, url: runtime.page.url() });
   const duration = interaction.phase === "target" ? 420 : interaction.phase === "acting" ? 140 : 0;
