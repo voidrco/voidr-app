@@ -7,7 +7,7 @@ import type { AiRun } from '../shared/ai-tester';
 import { parseLoopLaunch } from './deep-link';
 import { VoidrServiceClient } from './service-client';
 
-export type AiCaptureRecord = { journeyId: string; generation: string; sessionId: string; cycleId?: string; output?: string; synced?: boolean };
+export type AiCaptureRecord = { journeyId: string; generation: string; sessionId: string; cycleId?: string; output?: string; synced?: boolean; notExecuted?: boolean };
 type Api = <T>(path?: string, body?: unknown) => Promise<T>;
 type CaptureInput = { runtime: LocalRuntimeConfig; api: Api; run: AiRun; executorId: string; capture: AiCaptureRecord };
 export const newAiCapture = (journeyId: string): AiCaptureRecord => ({ journeyId, generation: randomUUID(), sessionId: randomUUID() });

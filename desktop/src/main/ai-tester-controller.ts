@@ -8,7 +8,7 @@ import type { LocalRuntimeConfig } from '@voidr/capture-contracts';
 import { aiScenarioSchema, aiRunSchema, type AiJourney, type AiRequest, type AiResult, type AiRun, type AiState } from '../shared/ai-tester';
 import type { JourneyEvent, JourneyState } from '../shared/journeys';
 import type { AiJourneyExecutor } from './ai-journey-executor';
-import type { VoidrServiceClient } from './service-client';
+import { VoidrApiError, type VoidrServiceClient } from './service-client';
 import { newAiCapture, prepareAiCapture, syncAiCapture, type AiCaptureRecord } from './ai-collector-session';
 
 type Session = { client: VoidrServiceClient; accessToken?: string };
@@ -29,7 +29,7 @@ const skipped = (journey: AiJourney, cancelled: boolean): AiResult => ({ journey
 
 export class AiTesterController {
   private state: AiState = { busy: false, uploadPending: false };
-  private current?: { journal: Journal; api: Api; runtime: LocalRuntimeConfig; controller: AbortController };
+  private current?: { journal: Journal; api: Api; runtime: LocalRuntimeConfig; controller: AbortController; preparingCaptureAt?: number };
   private queue: Promise<void> = Promise.resolve();
   private get root() { return this.deps.root; }
   constructor(private readonly deps: { root: string; openExternal: (url: string) => Promise<unknown>; loops: AiJourneyExecutor; session: (runtime: LocalRuntimeConfig) => Promise<Session>; publish: (state: AiState) => void }) {}
@@ -147,14 +147,29 @@ export class AiTesterController {
       for (const journey of current.journal.run.plan!.journeys.filter(item => !current.journal.run.results.some(result => result.journeyId === item.id))) await this.executeJourney(journey, secrets);
       await this.enqueue(() => this.progress(current.controller.signal.aborted ? 'cancelled' : 'completed'));
       await this.upload(current.journal, current.api, current.runtime);
-    } catch {
+    } catch (error) {
+      const captureSetupFailed = current.preparingCaptureAt !== undefined;
+      const reason = captureSetupFailed
+        ? `Não foi possível preparar a captura${error instanceof VoidrApiError ? ` (HTTP ${error.status})` : ''}. Nenhuma etapa de navegador foi executada.`
+        : 'A execução foi interrompida. Resultados parciais foram preservados.';
+      if (captureSetupFailed && current.journal.run.journeyId) {
+        const journeyId=current.journal.run.journeyId;
+        const capture=current.journal.captures?.find(item=>item.journeyId===journeyId);
+        if (capture) capture.notExecuted=true;
+        if (!current.journal.run.results.some(result=>result.journeyId===journeyId))
+          current.journal.run.results.push({journeyId,outcome:'unable_to_verify',reason,completedSteps:0,
+            durationMs:Math.max(0,Date.now()-current.preparingCaptureAt!),assertions:[]});
+      }
       if (current.journal.run.status === 'planning' && current.controller.signal.aborted) current.journal.run.status = 'cancelled';
       if (current.journal.run.status !== 'planning' && !terminal(current.journal.run.status)) {
         if (claimed) await this.enqueue(() => this.progress(current.controller.signal.aborted ? 'cancelled' : 'interrupted'));
         else current.journal.run.status = current.controller.signal.aborted ? 'cancelled' : 'interrupted';
       }
       await this.persist(current.journal);
-      this.publish({ run: current.journal.run, error: 'A execução foi interrompida. Resultados parciais foram preservados.', uploadPending: true });
+      const uploadPending = !captureSetupFailed || Boolean(current.journal.pending
+        || current.journal.files.some(file=>!file.uploaded)
+        || current.journal.captures?.some(capture=>!capture.synced&&!capture.notExecuted));
+      this.publish({ run: current.journal.run, error: reason, uploadPending });
     } finally {
       clearInterval(heartbeat);
       await this.queue;
@@ -175,12 +190,14 @@ export class AiTesterController {
     const capture = newAiCapture(journey.id);
     journal.captures = [...journal.captures ?? [], capture];
     await this.persist(journal);
+    this.current!.preparingCaptureAt=Date.now();
     const prepared = await prepareAiCapture({ runtime: this.current!.runtime, api: this.current!.api, run: journal.run, executorId: journal.executorId, capture });
     await this.persist(journal);
     await prepared.client.verificationIngest(prepared.authorization, 'lifecycle-events', {
       version: 'HIL/1', lifecycleVersion: prepared.authorization.safeContext.lifecycleVersion,
       idempotencyKey: `ai-start:${capture.generation}`, type: 'recording.started', occurredAt: new Date().toISOString(), payload: { host: 'ai-tester', platform: 'web' },
     });
+    this.current!.preparingCaptureAt=undefined;
     const state = await this.deps.loops.executePlanned({
       runId: journal.run.runId,
       config: { url: journal.run.targetUrl, data: journey.data, steps: journey.steps.map(step => step.instruction), stepKinds: journey.steps.map(step => step.kind), expected: [], headed: false, maxActions: 100 },
@@ -206,8 +223,14 @@ export class AiTesterController {
     await uploadEvidenceFiles({ runId: journal.run.runId, executorId: journal.executorId,
       files: journal.files, api, persist: () => this.persist(journal) });
     const sync = { failed: false };
-    for (const capture of journal.captures ?? []) await syncAiCapture({ runtime, api, run: journal.run,
-      executorId: journal.executorId, capture, persist: () => this.persist(journal) }).catch(() => { sync.failed = true; });
+    for (const capture of journal.captures ?? []) {
+      // Setup failure has no recording to upload. Keep the failure/capture intent in
+      // the journal; never fabricate media or rerun the browser to fill this gap.
+      if (['interrupted','cancelled'].includes(journal.run.status)
+        && (capture.notExecuted || (!capture.cycleId&&!capture.output))) continue;
+      await syncAiCapture({ runtime, api, run: journal.run,
+        executorId: journal.executorId, capture, persist: () => this.persist(journal) }).catch(() => { sync.failed = true; });
+    }
     if (sync.failed) throw new Error('Há gravações do Collector pendentes. Reenvie as evidências para concluir.');
     if (!journal.pending) journal.run = aiRunSchema.parse(await api(`/${journal.run.runId}`));
     this.publish({ run: journal.run, uploadPending: Boolean(journal.pending), error: undefined });

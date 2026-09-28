@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runHeadlessAiTest } from './headless-ai-tester';
 import type { VoidrServiceClient } from './service-client';
+import { VoidrApiError } from './service-client';
 
 const runtime = { serviceUrl: 'http://127.0.0.1:3000/v1', collectorUrl: 'http://127.0.0.1:3100',
   collectorScriptUrl: 'http://127.0.0.1:3100/script.js', platformUrl: 'http://127.0.0.1:3030',
@@ -31,6 +32,23 @@ async function fixture(status = 'ready') {
 afterEach(async () => { vi.useRealTimers(); await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
 
 describe('headless AI run lifecycle without Electron', () => {
+  it('reports capture setup failure without waiting forever for nonexistent media or replaying actions', async () => {
+    const f=await fixture(); f.run.plan.journeys[0]!.blockers=[];
+    const original=f.request.getMockImplementation()!;
+    f.request.mockImplementation(async request=>{
+      if(request.path?.endsWith('/capture')) throw new VoidrApiError('private-response-must-not-leak',404);
+      return original(request);
+    });
+    const final=await runHeadlessAiTest(input,f);
+    expect(final).toMatchObject({busy:false,uploadPending:false,run:{status:'interrupted',results:[{outcome:'unable_to_verify',completedSteps:0,assertions:[]}]}});
+    expect(final.error).toContain('HTTP 404');expect(JSON.stringify(final)).not.toContain('private-response-must-not-leak');
+    expect(final.run?.results[0]?.reason).toContain('Nenhuma etapa de navegador');
+    f.request.mockClear();
+    const recovered=await runHeadlessAiTest(input,{...f,mode:'retry-evidence'});
+    expect(recovered.uploadPending).toBe(false);
+    expect(f.request.mock.calls.map(([request])=>request.path)).toEqual([`/${runId}`]);
+    expect(recovered.run?.results[0]?.outcome).toBe('unable_to_verify');
+  });
   it('claims an existing run and preserves a blocked journey without claiming a passed validation', async () => {
     const f = await fixture();
     const final = await runHeadlessAiTest(input, f);
