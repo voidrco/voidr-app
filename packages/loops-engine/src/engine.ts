@@ -8,6 +8,7 @@ import { actionLabel, buildActions, describeAction, executeAction, type Action, 
 import { settledObservation, type Observation } from "./browser.js";
 import { validateConfig, type JourneyConfig } from "./config.js";
 import { createDecider, type StepOutcome } from "./decide.js";
+import { navigationActions } from "./navigation.js";
 import { executionValues } from "./values.js";
 import { selectorReferences } from "./control-references.js";
 import { TargetBlockedError } from "./target.js";
@@ -69,7 +70,10 @@ async function captureFrame(runtime: Runtime) {
 
 async function selectNext(runtime: Runtime, observation: Observation) {
   const { options, stepIndex } = runtime;
-  const actions = runtime.recovery.candidates(buildActions(observation, executionValues(options.config.steps[stepIndex]!, options.config.data)), observation);
+  const actions = runtime.recovery.candidates([
+    ...navigationActions(options.config.steps[stepIndex]!, options.config.url, options.config.stepKinds?.[stepIndex]),
+    ...buildActions(observation, executionValues(options.config.steps[stepIndex]!, options.config.data)),
+  ], observation);
   const redactor = secretRedactor(options.secrets);
   const verifiedObservation = await credentialEvidence(runtime.page, observation, options.secrets);
   const decision = await runtime.decide({ ...redactor.redact({ steps: options.config.steps, data: options.config.data, stepIndex, observation: verifiedObservation,
@@ -166,14 +170,15 @@ async function advance(runtime: Runtime) {
 async function performNext({ runtime, observation, action, confidence }: { runtime: Runtime; observation: Observation; action: Action; confidence: number }) {
   runtime.options.signal?.throwIfAborted();
   try {
-    const executed = await executeAction({ page: runtime.page, observation, action, secrets: runtime.options.secrets, credentialOrigin: new URL(runtime.options.config.url).origin, signal: runtime.options.signal, measure: runtime.timing.measure,
+    const executed = await executeAction({ page: runtime.page, observation, action, secrets: runtime.options.secrets, credentialOrigin: new URL(runtime.options.config.url).origin,
+      allowedNavigationUrls: navigationActions(runtime.options.config.steps[runtime.stepIndex]!, runtime.options.config.url, runtime.options.config.stepKinds?.[runtime.stepIndex]).map(action => action.url), signal: runtime.options.signal, measure: runtime.timing.measure,
       onInteraction: runtime.options.visual ? (interaction, screenshot) => showInteraction(runtime, interaction, screenshot) : undefined });
     runtime.records.at(-1)!.execution = executed ? "interaction_completed" : "not_executed";
     if (!executed) return recover(runtime, { kind: "stale", reason: "O alvo mudou antes da interação.", outcome: "not_executed" }, observation, action);
     runtime.history.push(describeAction(action));
     runtime.actions += 1;
     runtime.recovery.executed(action, observation);
-    runtime.lastAction = { label: actionLabel(action), value: action.control.value, previousText: observation.text };
+    runtime.lastAction = { label: actionLabel(action), value: action.kind === "navigate" ? observation.url : action.control.value, previousText: observation.text };
     runtime.options.onEvent?.({ type: "action", stepIndex: runtime.stepIndex, confidence, executed: true, message: actionLabel(action) });
     return null;
   } catch (error) {

@@ -5,20 +5,22 @@ import { prepareTarget, targetStillReady, type PreparedTarget } from "./target.j
 import { unmeasured, type Measure } from "./timing.js";
 
 type ActionKind = "click" | "fill" | "select" | "check" | "uncheck" | "enter";
-export type Action = { id: string; kind: ActionKind; control: Control; value?: string };
+export type ControlAction = { id: string; kind: ActionKind; control: Control; value?: string };
+export type Action = ControlAction | { id: string; kind: "navigate"; url: string };
 export type Interaction = {
   phase: "target" | "acting" | "typing" | "settled" | "scrolling" | "checking" | "passed" | "failed";
-  kind: ActionKind | "assert" | "scroll"; label: string;
+  kind: ActionKind | "navigate" | "assert" | "scroll"; label: string;
   target?: { x: number; y: number; width: number; height: number };
   point?: { x: number; y: number };
   viewport: { width: number; height: number };
 };
 type Execution = {
   page: Page; observation: Observation; action: Action; signal?: AbortSignal;
-  secrets?: Record<string, string>; credentialOrigin?: string;
+  secrets?: Record<string, string>; credentialOrigin?: string; allowedNavigationUrls?: string[];
   onInteraction?: (interaction: Interaction, screenshot?: string) => Promise<void>;
   measure?: Measure;
 };
+type ControlExecution = Omit<Execution, "action"> & { action: ControlAction };
 const FORBIDDEN = /desembols|\bpix\b|transferir|efetuar pagamento|pay now|place order|confirm purchase/i;
 
 function fillValues(control: Control, values: string[]) {
@@ -31,7 +33,7 @@ function fillValues(control: Control, values: string[]) {
   });
 }
 
-function controlActions(control: Control, values: string[]): Omit<Action, "id">[] {
+function controlActions(control: Control, values: string[]): Omit<ControlAction, "id">[] {
   if (FORBIDDEN.test(control.name)) return [];
   if (control.tag === "select") {
     return control.options.filter((option) => !option.disabled && option.value !== control.value)
@@ -40,8 +42,8 @@ function controlActions(control: Control, values: string[]): Omit<Action, "id">[
   if (control.type === "checkbox") return [{ kind: control.checked ? "uncheck" : "check", control }];
   if (control.type === "radio") return control.checked ? [] : [{ kind: "check", control }];
   if ((["input", "textarea"].includes(control.tag) || control.editable) && !["submit", "button", "reset"].includes(control.type)) {
-    const fills: Omit<Action, "id">[] = fillValues(control, values).map((value) => ({ kind: "fill", control, value }));
-    const actions: Omit<Action, "id">[] = [{ kind: "click", control }, ...fills];
+    const fills: Omit<ControlAction, "id">[] = fillValues(control, values).map((value) => ({ kind: "fill", control, value }));
+    const actions: Omit<ControlAction, "id">[] = [{ kind: "click", control }, ...fills];
     return control.tag === "input" && control.value ? [...actions, { kind: "enter", control }] : actions;
   }
   return [{ kind: "click", control }];
@@ -56,6 +58,7 @@ export function buildActions(observation: Observation, values: string[]) {
 }
 
 export function describeAction(action: Action) {
+  if (action.kind === "navigate") return `navigate to explicitly authored URL ${JSON.stringify(action.url)}`;
   const selected = action.control.options.find((option) => option.value === action.value);
   const value = selected?.label ?? action.value;
   const context = action.control.context ? ` within ${JSON.stringify(action.control.context)}` : "";
@@ -65,12 +68,13 @@ export function describeAction(action: Action) {
 }
 
 export function actionLabel(action: Action) {
+  if (action.kind === "navigate") return `Abrir ${action.url}`;
   const verbs = { click: "Clicar em", fill: "Preencher", select: "Selecionar em", check: "Marcar", uncheck: "Desmarcar", enter: "Pressionar Enter em" };
   const value = action.control.options.find((option) => option.value === action.value)?.label ?? action.value;
   return `${verbs[action.kind]} “${action.control.name}”${value === undefined ? "" : `: ${value}`}`;
 }
 
-async function fillControl(target: ElementHandle, deps: Execution) {
+async function fillControl(target: ElementHandle, deps: ControlExecution) {
   const { action } = deps;
   if (action.control.type !== "range") return fillText(target, deps);
   const increments = Math.round((Number(action.value) - Number(action.control.min || 0)) / Number(action.control.step || 1));
@@ -79,7 +83,7 @@ async function fillControl(target: ElementHandle, deps: Execution) {
   for (let index = 0; index < increments; index += 1) await target.press("ArrowRight");
 }
 
-async function fillText(target: ElementHandle, deps: Execution) {
+async function fillText(target: ElementHandle, deps: ControlExecution) {
   const { action, onInteraction } = deps;
   if (action.value?.includes('{{env.')) {
     if (deps.credentialOrigin && new URL(deps.page.url()).origin !== deps.credentialOrigin) throw new Error('O login em outro domínio exige intervenção manual.');
@@ -98,7 +102,7 @@ async function fillText(target: ElementHandle, deps: Execution) {
 }
 
 async function reportInteraction({ target, deps, phase, prepared }: {
-  target: ElementHandle; deps: Execution; phase: Interaction["phase"]; prepared?: PreparedTarget;
+  target: ElementHandle; deps: ControlExecution; phase: Interaction["phase"]; prepared?: PreparedTarget;
 }) {
   if (!deps.onInteraction) return;
   const viewport = deps.page.viewportSize() ?? { width: 1280, height: 900 };
@@ -114,7 +118,7 @@ export function visibleCenter(box: NonNullable<Interaction["target"]>, viewport:
   return { x: (left + right) / 2, y: (top + bottom) / 2 };
 }
 
-async function matchesObservation(deps: Execution) {
+async function matchesObservation(deps: ControlExecution) {
   const { page, observation, action } = deps;
   const fresh = await observe(page, action.control.matchedSelectors ?? []);
   const current = fresh.controls.find((control) => control.index === action.control.index && control.frame === action.control.frame);
@@ -123,7 +127,7 @@ async function matchesObservation(deps: Execution) {
     && JSON.stringify(stable(current)) === JSON.stringify(stable(action.control));
 }
 
-async function performAction(target: ElementHandle, deps: Execution, prepared: PreparedTarget) {
+async function performAction(target: ElementHandle, deps: ControlExecution, prepared: PreparedTarget) {
   const { action } = deps;
   const { position } = prepared;
   if (action.kind === "click") await target.click({ position });
@@ -135,6 +139,22 @@ async function performAction(target: ElementHandle, deps: Execution, prepared: P
 }
 
 export async function executeAction(deps: Execution) {
+  if (deps.action.kind === "navigate") {
+    const url = new URL(deps.action.url);
+    if (!deps.allowedNavigationUrls?.includes(url.href) || url.origin !== deps.credentialOrigin
+      || !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      throw new Error("Navegação fora das URLs autorizadas para este passo.");
+    }
+    deps.signal?.throwIfAborted();
+    if (deps.page.url() !== deps.observation.url) return false;
+    await (deps.measure ?? unmeasured)("playwright", actionLabel(deps.action),
+      () => deps.page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30_000 }));
+    return true;
+  }
+  return executeControl({ ...deps, action: deps.action });
+}
+
+async function executeControl(deps: ControlExecution) {
   const { page, action } = deps;
   const measure = deps.measure ?? unmeasured;
   if (!await measure("playwright", "Revalidar controles", () => matchesObservation(deps))) return false;

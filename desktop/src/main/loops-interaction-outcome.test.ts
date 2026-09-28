@@ -101,7 +101,7 @@ function regionId(request: Request, name: string, value: string) {
 }
 
 const observation = (text: string) => ({ url: 'http://127.0.0.1/', title: '', readyState: 'complete', text, controls: [], evidence: [] }) as unknown as DecisionInput['observation'];
-const clickAction = { id: 'a0', kind: 'click', control: { frame: 0, index: 0, name: 'Calcular prêmio', href: '', options: [], context: '' } } as unknown as DecisionInput['actions'][number];
+const clickAction = { id: 'a0', kind: 'click', control: { frame: 0, index: 0, name: 'Calcular prêmio', href: '', options: [], context: '' } } as unknown as Exclude<DecisionInput['actions'][number], { kind: 'navigate' }>;
 const negativeStep = (overrides: Partial<DecisionInput> = {}): DecisionInput => ({
   steps: ['Clique uma vez em Calcular prêmio para executar o cálculo que terá uma falha de rede controlada.'],
   stepIndex: 0, stepKind: 'action', observation: observation('Calcular prêmio\nErro ao calcular prêmio!'),

@@ -14,6 +14,7 @@ export function observationKey(observation: Observation) {
 }
 
 function actionKey(action: Action) {
+  if (action.kind === "navigate") return JSON.stringify([action.kind, action.url]);
   return JSON.stringify([action.kind, action.control.frame, action.control.name, action.control.href, action.value]);
 }
 

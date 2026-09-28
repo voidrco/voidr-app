@@ -24,7 +24,7 @@ it.skipIf(!process.env.VOIDR_TEST_CHROMIUM_EXECUTABLE)('executes the shared engi
   let needsHuman = false;
   const executor = new HeadlessJourneyExecutor(options => runEngine({ ...options, decide: async input => {
     const choice = input.observation.text.includes('Correction verified') ? 'step_done'
-      : input.actions.find(action => action.control.name === 'Check correction')!.id;
+      : input.actions.find(action => action.kind !== 'navigate' && action.control.name === 'Check correction')!.id;
     const client = { systemOne: async () => ({ answers: {
       status: answer(choice === 'step_done' ? 'done' : 'pending'), next: answer(choice),
       satisfied: { type: 'noul', noul: choice === 'step_done' ? 1 : 0 },
