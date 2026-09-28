@@ -52,7 +52,7 @@ it('continues another queued run while preserving an incomplete recording', asyn
     .mockImplementationOnce(async()=>{f.stop.abort();return {busy:false,uploadPending:false}});
   await runHeadlessAiWorker(f,execute);
   expect(execute.mock.calls.map(([input])=>input.runId)).toEqual([ref.runId,second.runId]);
-  const [scope]=await readdir(f.root);
+  const [scope]=await readdir(f.root);if(!scope)throw Error('Missing worker journal');
   const saved=JSON.parse(await readFile(path.join(f.root,scope,'dispatch',ref.runId+'.json'),'utf8'));
   expect(saved).toMatchObject({state:'pending',uploadPending:true,recoveryAttempts:0});
 });
@@ -66,7 +66,7 @@ it('bounds Collector recovery, preserves an attention record, and does not kill 
   try { await runHeadlessAiWorker({...f,publish,pollIntervalMs:500},execute); } finally {now.mockRestore()}
   expect(execute).toHaveBeenCalledTimes(3);
   expect(execute.mock.calls.every(([,opts])=>opts.mode==='retry-evidence')).toBe(true);
-  const [scope]=await readdir(f.root);
+  const [scope]=await readdir(f.root);if(!scope)throw Error('Missing worker journal');
   const saved=JSON.parse(await readFile(path.join(f.root,scope,'dispatch',ref.runId+'.json'),'utf8'));
   expect(saved).toMatchObject({state:'needs_attention',uploadPending:true,recoveryAttempts:3});
 });
