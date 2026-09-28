@@ -9,7 +9,7 @@ import { aiScenarioSchema, aiRunSchema, type AiJourney, type AiRequest, type AiR
 import type { JourneyEvent, JourneyState } from '../shared/journeys';
 import type { AiJourneyExecutor } from './ai-journey-executor';
 import { VoidrApiError, type VoidrServiceClient } from './service-client';
-import { newAiCapture, prepareAiCapture, syncAiCapture, type AiCaptureRecord } from './ai-collector-session';
+import { AiCapturePendingError, newAiCapture, prepareAiCapture, syncAiCapture, type AiCaptureRecord } from './ai-collector-session';
 
 type Session = { client: VoidrServiceClient; accessToken?: string };
 type Api = <T>(path?: string, body?: unknown) => Promise<T>;
@@ -231,7 +231,7 @@ export class AiTesterController {
       await syncAiCapture({ runtime, api, run: journal.run,
         executorId: journal.executorId, capture, persist: () => this.persist(journal) }).catch(() => { sync.failed = true; });
     }
-    if (sync.failed) throw new Error('Há gravações do Collector pendentes. Reenvie as evidências para concluir.');
+    if (sync.failed) throw new AiCapturePendingError();
     if (!journal.pending) journal.run = aiRunSchema.parse(await api(`/${journal.run.runId}`));
     this.publish({ run: journal.run, uploadPending: Boolean(journal.pending), error: undefined });
   }

@@ -7,6 +7,7 @@ import { localRuntimeConfigSchema, type LocalRuntimeConfig } from '@voidr/captur
 import { aiRunSchema } from '../shared/ai-tester';
 import { runHeadlessAiTest, type HeadlessAiTesterOptions } from './headless-ai-tester';
 import { VoidrApiError } from './service-client';
+import { AiCapturePendingError } from './ai-collector-session';
 
 const transientNetworkCodes = new Set(['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENETUNREACH',
   'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
@@ -19,7 +20,8 @@ function transientReadFailure(error: unknown): boolean {
 }
 
 const reference = z.object({ loopId: z.string().min(1).max(200), runId: z.string().uuid() });
-const dispatch = reference.extend({ state: z.enum(['pending', 'done']), uploadPending: z.boolean().optional() });
+const dispatch = reference.extend({ state: z.enum(['pending', 'done', 'needs_attention']), uploadPending: z.boolean().optional(),
+  recoveryAttempts: z.number().int().min(0).max(3).default(0), retryAfter: z.number().finite().nonnegative().optional() });
 type Dispatch = z.infer<typeof dispatch>;
 export type HeadlessWorkerOptions = HeadlessAiTesterOptions & {
   runtime: LocalRuntimeConfig;
@@ -79,23 +81,32 @@ export async function runHeadlessAiWorker(options: HeadlessWorkerOptions,
         const previous = jobs.get(ref.runId);
         if (previous && previous.loopId !== ref.loopId) throw new Error('Run associado a outro Loop.');
         if (!previous) {
-          const job: Dispatch = { ...ref, state: 'pending' };
+          const job: Dispatch = { ...ref, state: 'pending', recoveryAttempts: 0 };
           await save(job); jobs.set(job.runId, job);
         }
       }
       for (const job of jobs.values()) {
-        if (job.state === 'done' || options.signal?.aborted) continue;
+        if (job.state !== 'pending' || (job.retryAfter ?? 0) > Date.now() || options.signal?.aborted) continue;
         const current = aiRunSchema.parse(await readWithRecovery(() => session.client.aiTesterRequest({ loopId: job.loopId, path: `/${job.runId}`, accessToken: session.accessToken })));
         if (current.runId !== job.runId || current.loopId !== job.loopId) throw new Error('Resposta de execução com identidade divergente.');
         // Once claimed, recover only saved evidence; never repeat uncertain browser actions.
-        const mode = current.status === 'ready' ? 'execute' : 'retry-evidence';
-        const result = await execute({ runtime, loopId: job.loopId, runId: job.runId }, { ...options, root, mode });
+        const mode = !job.uploadPending && current.status === 'ready' ? 'execute' : 'retry-evidence';
+        const result = await execute({ runtime, loopId: job.loopId, runId: job.runId }, { ...options, root, mode }).catch(error => {
+          if (mode !== 'retry-evidence' || !(error instanceof AiCapturePendingError)) throw error;
+          return { busy: false, uploadPending: true, run: current };
+        });
         job.uploadPending = result.uploadPending;
         if (result.uploadPending) {
+          if (mode === 'retry-evidence') job.recoveryAttempts += 1;
+          job.retryAfter = Date.now() + Math.min(pollMs * 2 ** job.recoveryAttempts, 60_000);
+          if (job.recoveryAttempts >= 3) job.state = 'needs_attention';
           await save(job);
-          throw new Error('Evidências pendentes preservadas. Reinicie o worker para retomar somente o envio.');
+          try { options.publish?.({ ...result, error: job.state === 'needs_attention'
+            ? 'Gravação incompleta: recuperação automática esgotada. Evidências preservadas para revisão.'
+            : 'Evidências preservadas. O envio será retomado sem repetir o navegador.' }); } catch { /* Journal is authoritative. */ }
+          continue;
         }
-        job.state = 'done'; await save(job);
+        job.state = 'done'; delete job.retryAfter; await save(job);
       }
       await delay(pollMs, undefined, { signal: options.signal });
     }
