@@ -75,7 +75,7 @@ function questions(actions: Action[], observation: Observation, stepKind?: "acti
     }),
     evidence: choice({ task: "If currentStep requires verification, select the smallest COMPLETE evidence region that proves or disproves the condition, with all specified entities and values together. When the condition relates a result to an entered value, select their shared panel including both the result and field values, not just the result message.",
       rules: "Choose evidence appropriate to the condition: result rows for data, account/profile and sign-out controls for an authenticated session, and navigation state for the active area. Navigation links alone do not prove unrelated business results. Descriptions of possible behavior or instructions are never proof. For a condition spanning the page, including absence of an error, use the page-wide region. A cart item and quantity must belong to the same row. For absence or empty state, choose the actual results region or explicit empty-state message. Never infer absence from an unrelated fragment. Select none if no offered region can support this verification." }, {
-      ...Object.fromEntries((observation.evidence ?? []).map(item => [item.id, JSON.stringify({ text: item.text, values: item.values })])),
+      ...Object.fromEntries((observation.evidence ?? []).map(item => [item.id, JSON.stringify({ text: item.text, values: item.values, scope: item.context?.scope })])),
       none: "No relevant evidence region is available.",
     }),
     status: choice({ task: "Is currentStep already accomplished? Compare the current page with executedActions for this step.",

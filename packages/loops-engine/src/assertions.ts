@@ -52,7 +52,8 @@ async function inspect(deps: AssertionOptions, result: AssertionResult) {
     deps.signal?.throwIfAborted();
     assert.ok(await target.isVisible(), 'A evidência não está visível.');
     const observed = (await target.evaluate(readEvidence))[0];
-    result.actual = observed ? { text: observed.text, values: observed.values } : undefined;
+    result.actual = observed ? { text: observed.text, values: observed.values,
+      ...(evidence.context ? { context: observed.context } : {}) } : undefined;
     assert.deepEqual(result.actual, result.expected, 'A evidência mudou antes da verificação.');
     if (deps.probability > 0.4 && deps.probability < 0.6) throw new Error('A avaliação da condição permanece incerta.');
     result.status = 'failed';
@@ -67,7 +68,8 @@ export async function verifyAssertion(deps: AssertionOptions): Promise<Assertion
   const started = performance.now();
   const result: AssertionResult = { stepIndex: deps.stepIndex, instruction: deps.instruction,
     status: 'unverified', method: 'semantic+dom', probability: deps.probability,
-    expected: deps.evidence ? { text: deps.evidence.text, values: deps.evidence.values } : undefined,
+    expected: deps.evidence ? { text: deps.evidence.text, values: deps.evidence.values,
+      ...(deps.evidence.context ? { context: deps.evidence.context } : {}) } : undefined,
     reason: '', durationMs: 0, predicate: deps.predicate ?? 'semantic', terms: assertionTerms(deps.instruction), url: deps.page.url() };
   const tracing = deps.page.context().tracing;
   await tracing.group(`ASSERT: ${deps.instruction}`);
