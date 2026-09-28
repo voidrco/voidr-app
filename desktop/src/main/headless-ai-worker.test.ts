@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { runHeadlessAiWorker } from './headless-ai-worker';
 import type { runHeadlessAiTest } from './headless-ai-tester';
 import type { VoidrServiceClient } from './service-client';
+import { VoidrApiError } from './service-client';
 const runtime = { serviceUrl: 'http://127.0.0.1:3000/v1', collectorUrl: 'http://127.0.0.1:3100', collectorScriptUrl: 'http://127.0.0.1:3100/script.js', platformUrl: 'http://127.0.0.1:3030', localAdapter: true, localDevKey: 'fixture-only-key', organizationId: 'org' };
 const ref = { loopId: 'loop', runId: '0b7ba45c-2b4e-4e98-9367-ff5cd7dd9534' };
 const directories: string[] = [];
@@ -59,4 +60,38 @@ it('stops on denied queue access without executing or changing identity', async 
   const execute = vi.fn<typeof runHeadlessAiTest>();
   await expect(runHeadlessAiWorker(f, execute)).rejects.toThrow('403');
   expect(f.session).toHaveBeenCalledTimes(1); expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(['queue', 'run'])('recovers a transient %s read without duplicating the browser run', async where => {
+  const f = await fixture();
+  const read = where === 'queue' ? f.pending : f.read;
+  read.mockRejectedValueOnce(new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }));
+  const execute = vi.fn<typeof runHeadlessAiTest>(async () => { f.stop.abort(); return { busy: false, uploadPending: false }; });
+  await runHeadlessAiWorker({ ...f, pollIntervalMs: 500 }, execute);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it.each([401, 403])('does not retry HTTP %s or change the actor', async status => {
+  const f = await fixture(); f.pending.mockRejectedValue(new VoidrApiError('denied', status));
+  const execute = vi.fn<typeof runHeadlessAiTest>();
+  await expect(runHeadlessAiWorker({ ...f, pollIntervalMs: 500 }, execute)).rejects.toThrow('denied');
+  expect(f.pending).toHaveBeenCalledTimes(1); expect(execute).not.toHaveBeenCalled();
+});
+
+it('bounds repeated unavailability and releases the worker lock', async () => {
+  const f = await fixture(); f.pending.mockRejectedValue(new VoidrApiError('unavailable', 503));
+  const execute = vi.fn<typeof runHeadlessAiTest>(async () => { f.stop.abort(); return { busy: false, uploadPending: false }; });
+  await expect(runHeadlessAiWorker({ ...f, pollIntervalMs: 500 }, execute)).rejects.toThrow('unavailable');
+  expect(f.pending).toHaveBeenCalledTimes(4); expect(execute).not.toHaveBeenCalled();
+  f.pending.mockResolvedValue([ref]);
+  await runHeadlessAiWorker(f, execute);
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it('never retries an uncertain browser execution', async () => {
+  const f = await fixture();
+  const execute = vi.fn<typeof runHeadlessAiTest>().mockRejectedValue(new VoidrApiError('ack lost', 503));
+  await expect(runHeadlessAiWorker(f, execute)).rejects.toThrow('ack lost');
+  expect(execute).toHaveBeenCalledTimes(1);
 });

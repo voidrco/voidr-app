@@ -6,6 +6,17 @@ import { z } from 'zod';
 import { localRuntimeConfigSchema, type LocalRuntimeConfig } from '@voidr/capture-contracts';
 import { aiRunSchema } from '../shared/ai-tester';
 import { runHeadlessAiTest, type HeadlessAiTesterOptions } from './headless-ai-tester';
+import { VoidrApiError } from './service-client';
+
+const transientNetworkCodes = new Set(['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENETUNREACH',
+  'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+function transientReadFailure(error: unknown): boolean {
+  if (error instanceof VoidrApiError) return [408, 429, 502, 503, 504].includes(error.status);
+  if (error instanceof DOMException) return error.name === 'TimeoutError';
+  const cause = error instanceof TypeError ? error.cause : undefined;
+  return typeof cause === 'object' && cause !== null && 'code' in cause
+    && typeof cause.code === 'string' && transientNetworkCodes.has(cause.code);
+}
 
 const reference = z.object({ loopId: z.string().min(1).max(200), runId: z.string().uuid() });
 const dispatch = reference.extend({ state: z.enum(['pending', 'done']), uploadPending: z.boolean().optional() });
@@ -40,11 +51,23 @@ export async function runHeadlessAiWorker(options: HeadlessWorkerOptions,
     await writeFile(`${file}.tmp`, JSON.stringify(job), { mode: 0o600 });
     await rename(`${file}.tmp`, file);
   };
+  // Only reads retry. A claimed browser execution or uncertain upload retains the
+  // existing journal/recovery semantics instead of replaying external actions.
+  const readWithRecovery = async <T>(read: () => Promise<T>): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      options.signal?.throwIfAborted();
+      try { return await read(); }
+      catch (error) {
+        if (attempt >= 3 || options.signal?.aborted || !transientReadFailure(error)) throw error;
+        await delay(Math.min(pollMs * 2 ** attempt, 30_000), undefined, { signal: options.signal });
+      }
+    }
+  };
   try {
     while (!options.signal?.aborted) {
-      const session = await options.session(runtime);
+      const session = await readWithRecovery(() => options.session(runtime));
       // Read only this authenticated actor's headless queue; desktop requests are separate.
-      const refs = z.array(reference).max(20).parse(await session.client.aiTesterPendingLaunches(session.accessToken, 'headless'));
+      const refs = z.array(reference).max(20).parse(await readWithRecovery(() => session.client.aiTesterPendingLaunches(session.accessToken, 'headless')));
       const jobs = new Map<string, Dispatch>();
       for (const file of await readdir(queue)) {
         if (!/^[0-9a-f-]{36}\.json$/i.test(file)) continue;
@@ -62,7 +85,7 @@ export async function runHeadlessAiWorker(options: HeadlessWorkerOptions,
       }
       for (const job of jobs.values()) {
         if (job.state === 'done' || options.signal?.aborted) continue;
-        const current = aiRunSchema.parse(await session.client.aiTesterRequest({ loopId: job.loopId, path: `/${job.runId}`, accessToken: session.accessToken }));
+        const current = aiRunSchema.parse(await readWithRecovery(() => session.client.aiTesterRequest({ loopId: job.loopId, path: `/${job.runId}`, accessToken: session.accessToken })));
         if (current.runId !== job.runId || current.loopId !== job.loopId) throw new Error('Resposta de execução com identidade divergente.');
         // Once claimed, recover only saved evidence; never repeat uncertain browser actions.
         const mode = current.status === 'ready' ? 'execute' : 'retry-evidence';
