@@ -85,9 +85,12 @@ const decision = await createDecider({ systemOne: async request => {
     evidence: { type: 'choice', choice: 'e0_95', confidence: 1 }, assertionPredicate: { type: 'choice', choice: 'contains', confidence: 1 } };
   for (const key of Object.keys(request.questions)) if (key in answers) response.answers[key] = answers[key];
   return response;
-} })({ steps: ['Verify "Blue Top" quantity 3'], stepIndex: 0, stepKind: 'assertion', observation, actions: [], history: [] });
+} })({ steps: ['Verify "Blue Top" quantity 3'], stepIndex: 0, stepKind: 'assertion', observation, actions: [action], history: [] });
 assert.equal(decision.assertion.evidence.id, 'e0_95');
 assert.equal(decision.assertion.probability, 0.1);
 assert.equal(decision.answer.choice, 'blocked');
+assert.deepEqual(Object.keys(decision.request.questions.next.criteria), ['unsure'],
+  'A read-only assertion must not spend inference evaluating unauthorized UI actions');
+assert.equal(decision.assertion.readOnly, true);
 assert.deepEqual(observation, snapshot, 'Authoritative observation must remain unchanged');
 console.log('OK: bounded complete context, Unicode bytes, provider recovery, costs, cancellation, exact action references and failing assertions.');
