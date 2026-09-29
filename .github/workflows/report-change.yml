@@ -1,0 +1,15 @@
+# Copy this file to .github/workflows/report-change.yml in each service repo.
+# No changes needed — all logic lives in github-action-workflows.
+
+name: Report Change to Plane
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, edited, closed]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  report:
+    uses: voidrco/github-action-workflows/.github/workflows/change-management.yml@main
+    secrets: inherit
