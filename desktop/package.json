@@ -1,7 +1,7 @@
 {
   "name": "@voidr/capture-desktop",
-  "productName": "Voidr Capture",
-  "version": "0.1.22",
+  "productName": "Voidr",
+  "version": "0.1.23",
   "private": true,
   "description": "Voidr capture control plane for Web and Mobile",
   "license": "UNLICENSED",
@@ -11,6 +11,7 @@
     "forge": "./forge.config.cjs"
   },
   "scripts": {
+    "make:signed": "node scripts/make-signed.mjs",
     "build:main": "tsup --config tsup.config.ts",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:renderer",

@@ -51,7 +51,7 @@ module.exports = {
       /(^|[/\\])(?:forge|tsup|vite|vitest)\.config\.(?:cjs|ts)$/,
       /(^|[/\\])tsconfig\.json$/,
     ],
-    name: 'Voidr Capture',
+    name: 'Voidr',
     icon: path.join(__dirname, 'assets', `icon.${iconExtension}`),
     appBundleId: 'co.voidr.capture',
     appCategoryType: 'public.app-category.developer-tools',
@@ -60,10 +60,10 @@ module.exports = {
         'A Voidr usa o microfone somente quando você grava uma nota de voz durante uma captura.',
     },
     osxSign: appleSigningIdentity
-      ? { identity: appleSigningIdentity, hardenedRuntime: true }
+      ? { identity: appleSigningIdentity, keychain: appleNotaryKeychain, hardenedRuntime: true }
       : undefined,
     osxNotarize: appleNotarization,
-    protocols: [{ name: 'Voidr Capture', schemes: ['voidr'] }],
+    protocols: [{ name: 'Voidr', schemes: ['voidr'] }],
   },
   rebuildConfig: {},
   hooks: {
@@ -82,12 +82,12 @@ module.exports = {
           '--deep',
           '--sign',
           '-',
-          path.join(outputPath, 'Voidr Capture.app'),
+          path.join(outputPath, 'Voidr.app'),
         ]);
       }
       if (!publicRelease) {
-        const source = path.join(result.outputPaths[0], 'Voidr Capture.app');
-        const destination = path.join(__dirname, '..', 'Voidr Capture.app');
+        const source = path.join(result.outputPaths[0], 'Voidr.app');
+        const destination = path.join(__dirname, '..', 'Voidr.app');
         await rm(destination, { recursive: true, force: true });
         await cp(source, destination, { recursive: true, verbatimSymlinks: true });
       }
@@ -99,6 +99,8 @@ module.exports = {
         if (result.platform !== 'darwin') continue;
         for (const artifact of result.artifacts) {
           if (path.extname(artifact).toLowerCase() !== '.dmg') continue;
+          await execFileAsync('/usr/bin/codesign', ['--force', '--timestamp', '--sign', appleSigningIdentity,
+            '--keychain', appleNotaryKeychain, '--identifier', 'co.voidr.capture.installer', artifact]);
           await notarize({ appPath: artifact, ...appleNotarization });
         }
       }
@@ -129,14 +131,6 @@ module.exports = {
       name: '@electron-forge/maker-dmg',
       config: {
         format: 'ULFO',
-        ...(appleSigningIdentity
-          ? {
-              'code-sign': {
-                'signing-identity': appleSigningIdentity,
-                identifier: 'co.voidr.capture.installer',
-              },
-            }
-          : {}),
       },
     },
     {
@@ -148,8 +142,8 @@ module.exports = {
       config: {
         options: {
           name: 'voidr-capture',
-          productName: 'Voidr Capture',
-          bin: 'Voidr Capture',
+          productName: 'Voidr',
+          bin: 'Voidr',
           categories: ['Development'],
         },
       },
