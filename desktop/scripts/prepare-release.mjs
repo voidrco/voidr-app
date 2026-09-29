@@ -65,7 +65,7 @@ await mkdir(versionDirectory, { recursive: true });
 
 const builds = [];
 for (const { extension, source } of selected) {
-  const filename = `voidr-capture-${version}-${platformFilename}-${arch}.${extension}`;
+  const filename = `voidr-${version}-${platformFilename}-${arch}.${extension}`;
   const destination = path.join(versionDirectory, filename);
   await copyFile(source, destination);
   const metadata = await stat(destination);

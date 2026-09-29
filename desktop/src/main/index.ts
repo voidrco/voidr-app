@@ -46,6 +46,7 @@ import {
 const directory = __dirname;
 const isDevelopment = Boolean(process.env.VOIDR_CAPTURE_DEV_SERVER_URL);
 const isAutomation = !app.isPackaged && process.env.VOIDR_CAPTURE_E2E === '1';
+if (app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'Voidr Capture'));
 const developmentUserDataDir = process.env.VOIDR_CAPTURE_DEV_USER_DATA_DIR
   || (isDevelopment ? path.join(app.getPath('appData'), 'Voidr Capture Development') : undefined);
 if (!app.isPackaged && developmentUserDataDir && path.isAbsolute(developmentUserDataDir)) {
@@ -904,7 +905,7 @@ async function createWindow(): Promise<void> {
     minWidth: 980,
     minHeight: 680,
     show: false,
-    title: 'Voidr Capture',
+    title: 'Voidr',
     backgroundColor: '#050607',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
@@ -1050,7 +1051,7 @@ function registerProtocol(): void {
   }
   // Packaged test builds and backup bundles must never steal production links.
   if (process.platform === 'darwin' &&
-    (!app.isInApplicationsFolder() || path.basename(path.resolve(process.execPath, '../../..')) !== 'Voidr Capture.app')) return;
+    (!app.isInApplicationsFolder() || !['Voidr.app', 'Voidr Capture.app'].includes(path.basename(path.resolve(process.execPath, '../../..'))))) return;
   app.setAsDefaultProtocolClient('voidr');
 }
 

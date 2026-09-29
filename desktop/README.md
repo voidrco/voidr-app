@@ -74,7 +74,7 @@ npm run capture:package
 ```
 
 No macOS, copie o bundle gerado em
-`desktop/out/Voidr Capture-darwin-*/Voidr Capture.app` para `~/Applications` ou
+`desktop/out/Voidr-darwin-*/Voidr.app` para `~/Applications` ou
 `/Applications` e abra-o uma vez. O handler canônico é o bundle
 `co.voidr.capture`. O modo `npm run dev` deliberadamente não registra
 `com.github.electron` como dono de `voidr://`; o bridge MCP pode apontar para o
@@ -85,13 +85,24 @@ checkout com `VOIDR_CAPTURE_DEV_APP_DIR=/caminho/absoluto/voidr-app/desktop`.
 O workflow `Capture Desktop release` gera os pacotes Apple Silicon e Windows x64. No macOS, assina
 o app e o DMG com Developer ID, notariza e valida ambos com o Gatekeeper. O job macOS falha fechado
 se qualquer credencial de release estiver ausente; o job Windows é independente. Os secrets Apple
-esperados no GitHub são apenas referenciados pelo nome:
+ficam no Google Cloud Secret Manager, projeto `perceptive-bay-340802`:
 
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`;
 - `MACOS_CERTIFICATE_P12_BASE64` e `MACOS_CERTIFICATE_PASSWORD`.
 
-O workflow deriva `APPLE_CODESIGN_IDENTITY` do certificado Developer ID importado; não mantenha
-uma segunda cópia manual desse nome nos secrets.
+O script `desktop/scripts/make-signed.mjs` deriva a identidade do certificado e usa um keychain
+temporário removido ao terminar. A autenticação GCP usa `GCP_CAPTURE_RELEASE_CREDENTIALS`;
+a conta `github-voidr-app-capture@perceptive-bay-340802.iam.gserviceaccount.com` precisa de
+`roles/secretmanager.secretAccessor` somente nos cinco secrets acima. Não copie secrets Apple
+para o GitHub. Para validar credenciais num Mac autenticado, execute
+`node desktop/scripts/make-signed.mjs --check-credentials`.
+
+O workflow `Publish Capture to Platform` roda no push da branch padrão ou via `workflow_dispatch`.
+Ele gera macOS ARM64 no runner hospedado `macos-14`, assina e notariza app/DMG, verifica o Gatekeeper,
+gera Windows x64 e publica ambos em `gs://voidr_private_sa/capture/`. Não permite fallback macOS
+sem assinatura. O bucket pode ser alterado por `CAPTURE_RELEASE_BUCKET`; a versão mínima vem de
+`CAPTURE_MINIMUM_SUPPORTED_VERSION` (padrão `0.1.15`). A versão do pacote precisa ser maior que
+a publicada. O manifesto é atualizado somente depois de ambos os instaladores serem enviados.
 
 O artefato do workflow já sai com `capture/<versão>/...` e `capture/latest.json`, no layout consumido
 pelo Service. Ao promover para o bucket privado, envie primeiro os arquivos versionados e publique
