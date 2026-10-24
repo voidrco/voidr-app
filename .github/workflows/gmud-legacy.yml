@@ -1,0 +1,479 @@
+# Vendored for public-repository compatibility from voidrco/github-action-workflows
+# .github/workflows/change-management.yml at 510d724a5cfd717ab1bf5eea151c17a8a7403375.
+# Keep the upstream opt-in, GCP handoff and secret contract unchanged.
+name: ISO 27001 — Change Management Reporter
+on:
+  workflow_call:
+    inputs:
+      legacy_enabled:
+        type: boolean
+        default: false
+        required: false
+    secrets:
+      PLANE_API_KEY:
+        required: true
+      CF_ACCESS_CLIENT_ID:
+        required: false
+      CF_ACCESS_CLIENT_SECRET:
+        required: false
+
+env:
+  PLANE_BASE_URL: https://plane.voidr.co
+  PLANE_WORKSPACE: voidr
+  PLANE_PROJECT_ID: 93ef0ad9-87df-4a44-b42b-8eeebbcdf9e3
+
+jobs:
+  manage-gmud:
+    if: ${{ inputs.legacy_enabled && vars.GMUD_GCP_ENABLED != 'true' }}
+    name: Gerenciar GMUD
+    runs-on: ubuntu-latest
+    steps:
+      # ── DISCOVER: busca GMUD existente (idempotência + lookup p/ updates) ──
+
+      - name: Find existing GMUD for this PR
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          ALL_COMMENTS=$(gh api repos/$REPO/issues/$PR_NUMBER/comments --paginate)
+          GMUD_BODY=$(echo "$ALL_COMMENTS" | jq -r '.[] | select(.body | contains("plane-gmud-id:")) | .body' | head -1)
+          ISSUE_ID=$(echo "$GMUD_BODY" | grep -oE 'plane-gmud-id: [a-zA-Z0-9-]+' | grep -oE '[a-zA-Z0-9-]+$' || true)
+          if [ -n "$ISSUE_ID" ]; then
+            echo "✅ GMUD existente: $ISSUE_ID"
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "issue_id=$ISSUE_ID" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ Nenhum GMUD encontrado para este PR"
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── CREATE: PR aberto contra branch padrão, sem GMUD prévio ────────────
+
+      - name: Collect metadata (PR aberto)
+        id: meta
+        if: |
+          github.event_name == 'pull_request'
+          && contains(fromJSON('["opened", "ready_for_review"]'), github.event.action)
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.base.ref == github.event.repository.default_branch
+          && steps.find.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          AUTHOR_NAME=$(gh api users/$AUTHOR_LOGIN --jq '.name // empty')
+          echo "author_name=${AUTHOR_NAME:-${AUTHOR_LOGIN}}" >> $GITHUB_OUTPUT
+          echo "date_br=$(date +"%d/%m/%Y")" >> $GITHUB_OUTPUT
+
+          REVIEWERS=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews \
+            --jq '[.[] | {login: .user.login, state: .state, submitted_at: .submitted_at}]
+                  | group_by(.login)
+                  | map(max_by(.submitted_at))
+                  | [.[] | select(.state == "APPROVED") | .login]
+                  | unique | .[]' \
+            | while read -r login; do
+                NAME=$(gh api users/$login --jq '.name // empty')
+                echo "${NAME:-$login}"
+              done | paste -sd ', ' -)
+          echo "reviewers=${REVIEWERS:-Nenhum}" >> $GITHUB_OUTPUT
+
+      - name: Create Plane issue (Em Aberto)
+        id: create
+        if: |
+          github.event_name == 'pull_request'
+          && contains(fromJSON('["opened", "ready_for_review"]'), github.event.action)
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.base.ref == github.event.repository.default_branch
+          && steps.find.outputs.found == 'false'
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ steps.meta.outputs.author_name }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_DATE: ${{ steps.meta.outputs.date_br }}
+          PR_REVIEWERS: ${{ steps.meta.outputs.reviewers }}
+        run: |
+          CF_HEADERS=()
+          [ -n "$CF_CLIENT_ID" ] && CF_HEADERS=(
+            -H "CF-Access-Client-Id: $CF_CLIENT_ID"
+            -H "CF-Access-Client-Secret: $CF_CLIENT_SECRET"
+          )
+
+          STATES=$(curl -s -H "X-API-Key: $PLANE_API_KEY" "${CF_HEADERS[@]}" \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/states/")
+
+          STATE_ID=$(echo "$STATES" | jq -r '.results[] | select(.name | ascii_downcase | contains("aberto")) | .id')
+          if [ -z "$STATE_ID" ]; then
+            echo "❌ Estado 'Em Aberto' não encontrado:"
+            echo "$STATES" | jq -r '.results[].name'
+            exit 1
+          fi
+
+          DESC="<h2>Gestão de Mudança</h2><table>"
+          DESC+="<tr><td><strong>Nome do Solicitante</strong></td><td>${PR_AUTHOR}</td></tr>"
+          DESC+="<tr><td><strong>Data de Abertura</strong></td><td>${PR_DATE}</td></tr>"
+          DESC+="<tr><td><strong>Previsão de Deploy</strong></td><td>A definir</td></tr>"
+          DESC+="<tr><td><strong>Equipes</strong></td><td>ProduTech</td></tr>"
+          DESC+="<tr><td><strong>Descrição da Solicitação</strong></td><td><a href=\"${PR_URL}\">#${PR_NUMBER}</a> — ${PR_TITLE}</td></tr>"
+          DESC+="<tr><td><strong>Criticidade</strong></td><td>Normal</td></tr>"
+          DESC+="<tr><td><strong>Impacto</strong></td><td>Todos os Clientes</td></tr>"
+          DESC+="<tr><td><strong>Quais clientes</strong></td><td>Todos os Clientes</td></tr>"
+          DESC+="<tr><td><strong>Executou testes?</strong></td><td>⏳ Pendente</td></tr>"
+          DESC+="<tr><td><strong>Aprovadores</strong></td><td>${PR_REVIEWERS}</td></tr>"
+          DESC+="<tr><td><strong>Branch origem</strong></td><td>${PR_HEAD}</td></tr>"
+          DESC+="<tr><td><strong>Branch destino</strong></td><td>${PR_BASE}</td></tr>"
+          DESC+="<tr><td><strong>É possível realizar a ação de reversão?</strong></td><td>Sim — git revert do PR #${PR_NUMBER}</td></tr>"
+          DESC+="</table>"
+
+          PAYLOAD=$(jq -n \
+            --arg name "$PR_TITLE" \
+            --arg desc "$DESC" \
+            --arg state "$STATE_ID" \
+            '{name: $name, description_html: $desc, priority: "medium", state: $state}')
+
+          RESPONSE=$(curl -s -X POST \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/" \
+            -H "X-API-Key: $PLANE_API_KEY" \
+            -H "Content-Type: application/json" \
+            "${CF_HEADERS[@]}" \
+            -d "$PAYLOAD")
+
+          ISSUE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+          if [ -z "$ISSUE_ID" ]; then
+            echo "❌ Erro ao criar issue:"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          echo "issue_id=$ISSUE_ID" >> $GITHUB_OUTPUT
+          echo "✅ GMUD criada: $ISSUE_ID"
+
+      - name: Comment on PR with Plane issue link
+        if: |
+          github.event_name == 'pull_request'
+          && contains(fromJSON('["opened", "ready_for_review"]'), github.event.action)
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.base.ref == github.event.repository.default_branch
+          && steps.find.outputs.found == 'false'
+          && steps.create.outputs.issue_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_ID: ${{ steps.create.outputs.issue_id }}
+        run: |
+          PLANE_URL="$PLANE_BASE_URL/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/"
+          BODY="<!-- plane-gmud-id: $ISSUE_ID -->"$'\n'"🔗 **GMUD criada no Plane:** [Ver issue]($PLANE_URL)"$'\n'"📋 Status: **Em Aberto**"
+          gh api repos/$REPO/issues/$PR_NUMBER/comments -f body="$BODY"
+
+      # ── UPDATE: título do PR editado ───────────────────────────────────────
+
+      - name: Update Plane issue title (PR title changed)
+        if: |
+          github.event_name == 'pull_request'
+          && github.event.action == 'edited'
+          && github.event.changes.title != null
+          && steps.find.outputs.found == 'true'
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ISSUE_ID: ${{ steps.find.outputs.issue_id }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          CF_HEADERS=()
+          [ -n "$CF_CLIENT_ID" ] && CF_HEADERS=(
+            -H "CF-Access-Client-Id: $CF_CLIENT_ID"
+            -H "CF-Access-Client-Secret: $CF_CLIENT_SECRET"
+          )
+
+          PAYLOAD=$(jq -n --arg name "$PR_TITLE" '{name: $name}')
+
+          curl -s -X PATCH \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/" \
+            -H "X-API-Key: $PLANE_API_KEY" \
+            -H "Content-Type: application/json" \
+            "${CF_HEADERS[@]}" \
+            -d "$PAYLOAD" > /dev/null
+
+          echo "✅ Título sincronizado: $PR_TITLE"
+
+      # ── UPDATE: review enviado (atualiza Aprovadores) ──────────────────────
+
+      - name: Refresh approvers (PR review submitted)
+        if: |
+          github.event_name == 'pull_request_review'
+          && github.event.action == 'submitted'
+          && contains(fromJSON('["approved", "changes_requested", "dismissed"]'), github.event.review.state)
+          && steps.find.outputs.found == 'true'
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_ID: ${{ steps.find.outputs.issue_id }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          CF_HEADERS=()
+          [ -n "$CF_CLIENT_ID" ] && CF_HEADERS=(
+            -H "CF-Access-Client-Id: $CF_CLIENT_ID"
+            -H "CF-Access-Client-Secret: $CF_CLIENT_SECRET"
+          )
+
+          REVIEWERS=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews \
+            --jq '[.[] | {login: .user.login, state: .state, submitted_at: .submitted_at}]
+                  | group_by(.login)
+                  | map(max_by(.submitted_at))
+                  | [.[] | select(.state == "APPROVED") | .login]
+                  | unique | .[]' \
+            | while read -r login; do
+                NAME=$(gh api users/$login --jq '.name // empty')
+                echo "${NAME:-$login}"
+              done | paste -sd ', ' -)
+          REVIEWERS="${REVIEWERS:-Nenhum}"
+
+          ISSUE=$(curl -s -H "X-API-Key: $PLANE_API_KEY" "${CF_HEADERS[@]}" \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/")
+          DESC=$(echo "$ISSUE" | jq -r '.description_html // ""')
+
+          NEW_DESC=$(printf '%s' "$DESC" | REVIEWERS="$REVIEWERS" perl -0777 -pe '
+            s|(<strong>Aprovadores</strong>.*?<td[^>]*>).*?(</td>)|$1 . $ENV{REVIEWERS} . $2|se;
+          ')
+
+          if [ "$NEW_DESC" = "$DESC" ]; then
+            echo "⚠️ Padrão Aprovadores não encontrado na descrição — pulando refresh"
+            exit 0
+          fi
+
+          PAYLOAD=$(jq -n --arg desc "$NEW_DESC" '{description_html: $desc}')
+
+          curl -s -X PATCH \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/" \
+            -H "X-API-Key: $PLANE_API_KEY" \
+            -H "Content-Type: application/json" \
+            "${CF_HEADERS[@]}" \
+            -d "$PAYLOAD" > /dev/null
+
+          echo "✅ Aprovadores atualizados: $REVIEWERS"
+
+      # ── UPDATE: PR fechado — STATE (caminho crítico, com retry) ────────────
+      # Separado da atualização cosmética: o que importa para compliance é o
+      # state transition. Falha em metadados auxiliares não pode bloquear isso.
+
+      - name: Update GMUD state (critical)
+        id: close_state
+        if: |
+          github.event_name == 'pull_request'
+          && github.event.action == 'closed'
+          && steps.find.outputs.found == 'true'
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ISSUE_ID: ${{ steps.find.outputs.issue_id }}
+          IS_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          CF_HEADERS=()
+          [ -n "$CF_CLIENT_ID" ] && CF_HEADERS=(
+            -H "CF-Access-Client-Id: $CF_CLIENT_ID"
+            -H "CF-Access-Client-Secret: $CF_CLIENT_SECRET"
+          )
+
+          if [ "$IS_MERGED" = "true" ]; then
+            STATE_NAME="Implementado"
+            STATUS_LABEL="✅ Implementado"
+          else
+            STATE_NAME="Descartado"
+            STATUS_LABEL="🗑️ Descartado"
+          fi
+
+          # Retry helper: 3 tentativas com backoff exponencial (2s, 6s, 18s)
+          retry() {
+            local max=3 delay=2 i
+            for i in $(seq 1 $max); do
+              "$@" && return 0
+              if [ $i -lt $max ]; then
+                echo "  ⏳ Tentativa $i/$max falhou, aguardando ${delay}s..."
+                sleep $delay
+                delay=$((delay * 3))
+              fi
+            done
+            return 1
+          }
+
+          fetch_states() {
+            curl -sf -H "X-API-Key: $PLANE_API_KEY" "${CF_HEADERS[@]}" \
+              "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/states/" \
+              -o /tmp/states.json
+          }
+          retry fetch_states || { echo "❌ Falha ao buscar estados do Plane após retries"; exit 1; }
+
+          STATE_ID=$(jq -r --arg name "$STATE_NAME" \
+            '.results[] | select(.name | ascii_downcase | contains($name | ascii_downcase)) | .id' /tmp/states.json)
+
+          if [ -z "$STATE_ID" ]; then
+            echo "❌ Estado '$STATE_NAME' não encontrado:"
+            jq -r '.results[].name' /tmp/states.json
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n --arg state "$STATE_ID" '{state: $state}')
+
+          patch_state() {
+            curl -sf -X PATCH \
+              "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/" \
+              -H "X-API-Key: $PLANE_API_KEY" \
+              -H "Content-Type: application/json" \
+              "${CF_HEADERS[@]}" \
+              -d "$PAYLOAD" -o /dev/null
+          }
+          retry patch_state || { echo "❌ Falha ao atualizar state da GMUD após retries"; exit 1; }
+
+          echo "status_label=$STATUS_LABEL" >> $GITHUB_OUTPUT
+          echo "✅ Estado da GMUD atualizado para: $STATE_NAME"
+
+      # ── UPDATE: PR fechado — DESCRIPTION (cosmético, tolera falha) ─────────
+      # Atualiza metadados (aprovadores, merged-by, status de testes). Falha
+      # aqui é tolerada: o state já foi atualizado, compliance está satisfeita.
+
+      - name: Refresh GMUD description (best-effort)
+        if: |
+          github.event_name == 'pull_request'
+          && github.event.action == 'closed'
+          && steps.find.outputs.found == 'true'
+        continue-on-error: true
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          CF_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_ID: ${{ steps.find.outputs.issue_id }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          MERGED_BY_LOGIN: ${{ github.event.pull_request.merged_by.login }}
+          MERGED_AT: ${{ github.event.pull_request.merged_at }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          IS_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          # Sem 'set -e' agressivo: cada fetch tem fallback explícito
+          set +e
+
+          CF_HEADERS=()
+          [ -n "$CF_CLIENT_ID" ] && CF_HEADERS=(
+            -H "CF-Access-Client-Id: $CF_CLIENT_ID"
+            -H "CF-Access-Client-Secret: $CF_CLIENT_SECRET"
+          )
+
+          OPENED_DATE_BR=$(date -d "$PR_CREATED_AT" +"%d/%m/%Y" 2>/dev/null \
+            || date -jf "%Y-%m-%dT%H:%M:%SZ" "$PR_CREATED_AT" +"%d/%m/%Y" 2>/dev/null \
+            || echo "—")
+
+          AUTHOR_NAME=$(gh api "users/$AUTHOR_LOGIN" --jq '.name // empty' 2>/dev/null)
+          AUTHOR_NAME="${AUTHOR_NAME:-${AUTHOR_LOGIN}}"
+
+          REVIEWERS_RAW=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" 2>/dev/null \
+            --jq '[.[] | {login: .user.login, state: .state, submitted_at: .submitted_at}]
+                  | group_by(.login)
+                  | map(max_by(.submitted_at))
+                  | [.[] | select(.state == "APPROVED") | .login]
+                  | unique | .[]')
+          REVIEWERS=""
+          if [ -n "$REVIEWERS_RAW" ]; then
+            REVIEWERS=$(echo "$REVIEWERS_RAW" | while read -r login; do
+              NAME=$(gh api "users/$login" --jq '.name // empty' 2>/dev/null)
+              echo "${NAME:-$login}"
+            done | paste -sd ', ' -)
+          fi
+          REVIEWERS="${REVIEWERS:-Nenhum}"
+
+          if [ "$IS_MERGED" = "true" ]; then
+            DEPLOY_DATE=$(date -d "$MERGED_AT" +"%d/%m/%Y" 2>/dev/null \
+              || date -jf "%Y-%m-%dT%H:%M:%SZ" "$MERGED_AT" +"%d/%m/%Y" 2>/dev/null \
+              || echo "—")
+
+            MERGED_BY_NAME=$(gh api "users/$MERGED_BY_LOGIN" --jq '.name // empty' 2>/dev/null)
+            MERGED_BY_NAME="${MERGED_BY_NAME:-${MERGED_BY_LOGIN}}"
+
+            CHECK_JSON=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs" 2>/dev/null)
+            if [ -n "$CHECK_JSON" ]; then
+              FAILED=$(echo "$CHECK_JSON" | jq '[.check_runs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length' 2>/dev/null)
+            fi
+            if [ -z "$FAILED" ]; then
+              TESTES="⚠️ Não verificado"
+            elif [ "$FAILED" = "0" ]; then
+              TESTES="✅ Sim"
+            else
+              TESTES="❌ Não ($FAILED checks falharam)"
+            fi
+          else
+            DEPLOY_DATE="Cancelado"
+            MERGED_BY_NAME="N/A"
+            TESTES="N/A"
+          fi
+
+          DESC="<h2>Gestão de Mudança</h2><table>"
+          DESC+="<tr><td><strong>Nome do Solicitante</strong></td><td>${AUTHOR_NAME}</td></tr>"
+          DESC+="<tr><td><strong>Data de Abertura</strong></td><td>${OPENED_DATE_BR}</td></tr>"
+          DESC+="<tr><td><strong>Previsão de Deploy</strong></td><td>${DEPLOY_DATE}</td></tr>"
+          DESC+="<tr><td><strong>Equipes</strong></td><td>ProduTech</td></tr>"
+          DESC+="<tr><td><strong>Descrição da Solicitação</strong></td><td><a href=\"${PR_URL}\">#${PR_NUMBER}</a> — ${PR_TITLE}</td></tr>"
+          DESC+="<tr><td><strong>Criticidade</strong></td><td>Normal</td></tr>"
+          DESC+="<tr><td><strong>Impacto</strong></td><td>Todos os Clientes</td></tr>"
+          DESC+="<tr><td><strong>Quais clientes</strong></td><td>Todos os Clientes</td></tr>"
+          DESC+="<tr><td><strong>Executou testes?</strong></td><td>${TESTES}</td></tr>"
+          DESC+="<tr><td><strong>Aprovadores</strong></td><td>${REVIEWERS}</td></tr>"
+          DESC+="<tr><td><strong>Branch origem</strong></td><td>${PR_HEAD}</td></tr>"
+          DESC+="<tr><td><strong>Branch destino</strong></td><td>${PR_BASE}</td></tr>"
+          DESC+="<tr><td><strong>Merged by</strong></td><td>${MERGED_BY_NAME}</td></tr>"
+          DESC+="<tr><td><strong>É possível realizar a ação de reversão?</strong></td><td>Sim — git revert do PR #${PR_NUMBER}</td></tr>"
+          DESC+="</table>"
+
+          PAYLOAD=$(jq -n --arg desc "$DESC" '{description_html: $desc}')
+
+          curl -s -X PATCH \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/" \
+            -H "X-API-Key: $PLANE_API_KEY" \
+            -H "Content-Type: application/json" \
+            "${CF_HEADERS[@]}" \
+            -d "$PAYLOAD" > /dev/null
+
+          echo "✅ Descrição da GMUD refrescada"
+
+      - name: Update PR comment with new status
+        if: |
+          github.event_name == 'pull_request'
+          && github.event.action == 'closed'
+          && steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_ID: ${{ steps.find.outputs.issue_id }}
+          IS_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          if [ "$IS_MERGED" = "true" ]; then
+            STATUS_LABEL="✅ Implementado"
+          else
+            STATUS_LABEL="🗑️ Descartado"
+          fi
+          PLANE_URL="$PLANE_BASE_URL/$PLANE_WORKSPACE/projects/$PLANE_PROJECT_ID/issues/$ISSUE_ID/"
+          COMMENT_ID=$(gh api repos/$REPO/issues/$PR_NUMBER/comments --paginate \
+            --jq '[.[] | select(.body | contains("plane-gmud-id:"))] | last | .id')
+          BODY="<!-- plane-gmud-id: $ISSUE_ID -->"$'\n'"🔗 **GMUD no Plane:** [Ver issue]($PLANE_URL)"$'\n'"📋 Status: **$STATUS_LABEL**"
+          gh api repos/$REPO/issues/comments/$COMMENT_ID -X PATCH -f body="$BODY"
