@@ -9,7 +9,16 @@ on:
   pull_request_review:
     types: [submitted]
 
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+
 jobs:
   report:
-    uses: voidrco/github-action-workflows/.github/workflows/change-management.yml@main
-    secrets: inherit
+    # Preserve the upstream opt-in for the legacy Plane reporter during the GCP transition.
+    uses: voidrco/github-action-workflows/.github/workflows/change-management.yml@510d724a5cfd717ab1bf5eea151c17a8a7403375
+    secrets:
+      PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
