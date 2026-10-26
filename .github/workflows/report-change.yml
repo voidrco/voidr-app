@@ -1,5 +1,5 @@
-# Copy this file to .github/workflows/report-change.yml in each service repo.
-# No changes needed — all logic lives in github-action-workflows.
+# Public repositories cannot call private reusable workflows.
+# The local reporter preserves the verified upstream revision and legacy opt-in.
 
 name: Report Change to Plane
 
@@ -9,7 +9,16 @@ on:
   pull_request_review:
     types: [submitted]
 
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+
 jobs:
   report:
-    uses: voidrco/github-action-workflows/.github/workflows/change-management.yml@main
-    secrets: inherit
+    # Preserve the upstream opt-in for the legacy Plane reporter during the GCP transition.
+    uses: ./.github/workflows/gmud-legacy.yml
+    secrets:
+      PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
