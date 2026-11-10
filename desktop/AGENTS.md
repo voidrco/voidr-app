@@ -1,0 +1,2 @@
+- Execute os checks necessários aos projetos alterados antes da entrega, sem pedir autorização: typecheck sem emissão, lint, compilação e validações pertinentes ao escopo. Não execute testes unitários nem comandos agregados que os incluam; inspecione os scripts e selecione etapas separadas. Valide ao final da implementação e repita apenas os checks afetados por falhas ou novas alterações. Reporte bloqueios sem declarar aprovação.
+
