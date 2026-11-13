@@ -29,6 +29,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install Electron before parallel tests
+        run: node node_modules/electron/install.js --no
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run capture:typecheck
       - name: Install Chromium for journey checks
         run: node node_modules/playwright-core/cli.js install --with-deps chromium

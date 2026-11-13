@@ -54,7 +54,7 @@
     "vite": "^8.2.1",
     "vitest": "^3.2.4",
     "wait-on": "^8.0.4",
-    "zod": "^4.4.3",
+    "zod": "4.6.7",
     "@voidr/loops-engine": "*"
   }
 }
